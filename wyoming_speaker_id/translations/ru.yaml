@@ -1,0 +1,48 @@
+configuration:
+  upstream_uri:
+    name: Основной STT
+    description: Wyoming-сервис распознавания речи, который делает транскрипцию (например, tcp://core-whisper:10300).
+  model:
+    name: Модель голоса
+    description: Модель отпечатков голоса. При смене все отпечатки пересчитываются из сохранённых образцов.
+  threshold_high:
+    name: Порог «свой»
+    description: Минимальное сходство, при котором к тексту добавляется имя человека.
+  threshold_low:
+    name: Порог «гость»
+    description: Ниже этого сходства говорящий считается гостем; между порогами результат «неизвестно».
+  margin:
+    name: Отрыв
+    description: Насколько лучший кандидат должен опережать второго.
+  min_speech_seconds:
+    name: Минимум речи (с)
+    description: Более короткие команды не распознаются и получают метку «неизвестно».
+  tag_template:
+    name: Шаблон метки
+    description: Как переписывается текст. Подстановки {name} и {text}.
+  guest_label:
+    name: Метка гостя
+    description: Имя для нераспознанных голосов.
+  unknown_label:
+    name: Метка «неизвестно»
+    description: Имя для неуверенного результата или слишком короткой команды.
+  tag_unknown:
+    name: Помечать неуверенные
+    description: Если выключено, неуверенные и короткие команды передаются без метки.
+  cohort_norm:
+    name: Нормализация по когорте
+    description: Нормировать оценки по загруженным записям чужих людей (AS-norm). Пороги становятся z-оценками.
+  publish_sensor:
+    name: Публиковать сенсор
+    description: Обновлять сенсор Home Assistant с последним говорящим.
+  sensor_entity:
+    name: Сенсор
+    description: Entity id сенсора.
+  recent_buffer_size:
+    name: Последние фразы
+    description: Сколько последних фраз (со звуком, только в памяти) хранить для веб-интерфейса.
+  log_level:
+    name: Уровень логов
+    description: Подробность логов.
+network:
+  10310/tcp: Wyoming STT (нужен только для доступа извне Home Assistant)

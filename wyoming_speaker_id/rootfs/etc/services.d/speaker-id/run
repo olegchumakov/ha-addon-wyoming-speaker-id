@@ -1,0 +1,15 @@
+#!/usr/bin/with-contenv bashio
+# shellcheck shell=bash
+set -e
+
+hostname="$(hostname)"
+if bashio::var.has_value "${hostname}"; then
+  config=$(bashio::var.json uri "tcp://${hostname}:10310")
+  if bashio::discovery "wyoming" "${config}" > /dev/null; then
+    bashio::log.info "Wyoming discovery sent (tcp://${hostname}:10310)"
+  else
+    bashio::log.warning "Wyoming discovery failed; add the Wyoming integration manually"
+  fi
+fi
+
+exec /opt/venv/bin/python3 -m speaker_id

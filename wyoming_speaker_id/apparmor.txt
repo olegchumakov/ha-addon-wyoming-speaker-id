@@ -1,0 +1,30 @@
+#include <tunables/global>
+
+profile wyoming_speaker_id flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  capability,
+  file,
+  signal,
+  network,
+
+  # s6-overlay
+  /init ix,
+  /bin/** ix,
+  /usr/bin/** ix,
+  /run/{s6,s6-rc*,service}/** ix,
+  /package/** ix,
+  /command/** ix,
+  /etc/services.d/** rwix,
+  /etc/cont-init.d/** rwix,
+  /etc/cont-finish.d/** rwix,
+  /run/{,**} rwk,
+  /dev/tty rw,
+
+  # app
+  /opt/venv/** rix,
+  /usr/src/speaker_id/** r,
+  /usr/share/speaker_id/** r,
+  /data/** rw,
+  /tmp/** rwk,
+}

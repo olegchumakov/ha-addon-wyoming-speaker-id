@@ -1,0 +1,53 @@
+name: Wyoming Speaker ID
+version: "0.1.0"
+slug: wyoming_speaker_id
+description: Speech-to-text proxy that tells who is speaking (local speaker identification)
+url: https://github.com/olegchumakov/ha-addon-wyoming-speaker-id
+arch:
+  - amd64
+  - aarch64
+init: false
+image: ghcr.io/olegchumakov/{arch}-addon-wyoming-speaker-id
+homeassistant_api: true
+discovery:
+  - wyoming
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:account-voice
+panel_title: Speaker ID
+ports:
+  10310/tcp: null
+ports_description:
+  10310/tcp: Wyoming STT (only needed for access from outside Home Assistant)
+options:
+  upstream_uri: tcp://core-whisper:10300
+  model: redimnet2_b2
+  threshold_high: 0.45
+  threshold_low: 0.30
+  margin: 0.08
+  min_speech_seconds: 0.6
+  tag_template: "[speaker: {name}] {text}"
+  guest_label: guest
+  unknown_label: unknown
+  tag_unknown: true
+  cohort_norm: false
+  publish_sensor: true
+  sensor_entity: sensor.voice_last_speaker
+  recent_buffer_size: 30
+  log_level: info
+schema:
+  upstream_uri: str
+  model: list(redimnet2_b2|campplus_zh_en_advanced|campplus_en_voxceleb|eres2net_en_voxceleb|eres2netv2_zh_cn|wespeaker_resnet34_en)
+  threshold_high: float(-1,1)
+  threshold_low: float(-1,1)
+  margin: float(0,1)
+  min_speech_seconds: float(0,10)
+  tag_template: str
+  guest_label: str
+  unknown_label: str
+  tag_unknown: bool
+  cohort_norm: bool
+  publish_sensor: bool
+  sensor_entity: match(^sensor\.[a-z0-9_]+$)
+  recent_buffer_size: int(0,200)
+  log_level: list(debug|info|warning|error)

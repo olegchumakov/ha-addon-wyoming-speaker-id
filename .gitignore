@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv*/
+*.wav
+data/
+.ruff_cache/

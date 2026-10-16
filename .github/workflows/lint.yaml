@@ -1,0 +1,53 @@
+name: Lint
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  addon-linter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add-on linter
+        uses: frenck/action-addon-linter@v2
+        with:
+          path: "./wyoming_speaker_id"
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Ruff
+        run: pipx run ruff check --line-length 120 wyoming_speaker_id/rootfs/usr/src/speaker_id tools
+      - name: Import / smoke test
+        working-directory: wyoming_speaker_id/rootfs/usr/src/speaker_id
+        env:
+          SPEAKER_ID_BUNDLED: ${{ github.workspace }}/wyoming_speaker_id/models
+        run: |
+          pip install -r requirements.txt
+          python - <<'PY'
+          import numpy as np
+          from speaker_id import models
+          from speaker_id.embed import Embedder, Vad
+          from speaker_id.store import decide
+          p, k = models.resolve("redimnet2_b2", "/tmp/sid")
+          e = Embedder(p, k)(np.random.randn(32000).astype("float32") * 0.1)
+          assert e.shape == (192,), e.shape
+          Vad(models.vad_path()).trim(np.zeros(16000, "float32"))
+          assert decide({"a": 0.6, "b": 0.2}, 2.0, 0.45, 0.3, 0.08, 0.6).name == "a"
+          assert decide({"a": 0.1}, 2.0, 0.45, 0.3, 0.08, 0.6).label == "guest"
+          assert decide({"a": 0.9}, 0.3, 0.45, 0.3, 0.08, 0.6).label == "short"
+          print("ok")
+          PY
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck
+        run: shellcheck -x wyoming_speaker_id/rootfs/etc/services.d/speaker-id/run wyoming_speaker_id/rootfs/etc/services.d/speaker-id/finish
