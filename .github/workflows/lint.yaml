@@ -9,7 +9,7 @@ jobs:
   addon-linter:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Add-on linter
         uses: frenck/action-addon-linter@v2
         with:
@@ -18,7 +18,7 @@ jobs:
   python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
@@ -48,6 +48,6 @@ jobs:
   shellcheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: ShellCheck
         run: shellcheck -x wyoming_speaker_id/rootfs/etc/services.d/speaker-id/run wyoming_speaker_id/rootfs/etc/services.d/speaker-id/finish
