@@ -12,4 +12,5 @@ if bashio::var.has_value "${hostname}"; then
   fi
 fi
 
+cd /usr/src/speaker_id
 exec /opt/venv/bin/python3 -m speaker_id

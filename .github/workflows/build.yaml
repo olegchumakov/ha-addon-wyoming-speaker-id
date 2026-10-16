@@ -73,5 +73,6 @@ jobs:
           docker buildx build --load --platform ${{ matrix.platform }} \
             --build-arg BUILD_FROM=${{ steps.meta.outputs.base }} -t sid-test wyoming_speaker_id \
             --cache-from type=gha,scope=${{ matrix.arch }}
+          docker run --rm --entrypoint /bin/bash sid-test -c "cd /tmp && grep -q \"cd /usr/src/speaker_id\" /etc/services.d/speaker-id/run"
           docker run --rm --entrypoint /opt/venv/bin/python3 -w /usr/src/speaker_id sid-test -c \
             "from speaker_id import models; from speaker_id.embed import Embedder; import numpy as np; p,k=models.resolve('redimnet2_b2','/tmp'); print(Embedder(p,k)(np.zeros(32000,'float32')+0.01).shape)"

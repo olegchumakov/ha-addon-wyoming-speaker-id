@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+- Fix start-up: run the service from its source directory ("No module named speaker_id").
+- CI: bump GitHub Actions.
+
 ## 0.1.0
 
 - First release: Wyoming STT proxy with local speaker identification.
