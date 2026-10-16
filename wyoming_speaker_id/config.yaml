@@ -12,7 +12,6 @@ homeassistant_api: true
 discovery:
   - wyoming
 ingress: true
-ingress_port: 8099
 panel_icon: mdi:account-voice
 panel_title: Speaker ID
 ports:
