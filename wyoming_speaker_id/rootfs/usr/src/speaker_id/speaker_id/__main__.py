@@ -8,6 +8,7 @@ import itertools
 import json
 import logging
 import os
+import shutil
 import time
 from functools import partial
 
@@ -28,15 +29,23 @@ _LOG = logging.getLogger("speaker_id")
 DATA = os.environ.get("SPEAKER_ID_DATA", "/data")
 WEB_DIR = os.path.join(os.path.dirname(__file__), "web")
 TUNABLE = {"threshold_high": (-1.0, 50.0), "threshold_low": (-1.0, 50.0), "margin": (0.0, 10.0),
-           "min_speech_seconds": (0.0, 10.0)}
+           "min_speech_seconds": (0.0, 10.0), "threshold_high_norm": (-5.0, 50.0),
+           "threshold_low_norm": (-5.0, 50.0), "margin_norm": (0.0, 10.0)}
+# With comparison against other voices ("cohort normalization") scores are on a different scale, so a separate set
+# of thresholds is used automatically; the user never has to re-tune when switching it on or off.
+PLAIN_KEYS = ("threshold_high", "threshold_low", "margin", "min_speech_seconds")
+NORM_KEYS = ("threshold_high_norm", "threshold_low_norm", "margin_norm", "min_speech_seconds")
+MIN_COHORT = 10
 DEFAULTS = {
     "upstream_uri": "tcp://core-whisper:10300", "model": "redimnet2_b2", "threshold_high": 0.45,
     "threshold_low": 0.30, "margin": 0.08, "min_speech_seconds": 0.6, "tag_template": "[speaker: {name}] {text}",
     "guest_label": "guest", "unknown_label": "unknown", "tag_unknown": True, "cohort_norm": False,
     "publish_sensor": True, "sensor_entity": "sensor.voice_last_speaker", "recent_buffer_size": 30,
     "log_level": "info", "wyoming_uri": "tcp://0.0.0.0:10310", "web_port": 8099, "max_speech_seconds": 8.0,
+    "threshold_high_norm": 2.5, "threshold_low_norm": 1.0, "margin_norm": 0.5,
 }
 MAX_KEEP_S = 15.0
+NO_STORE = {"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"}
 
 
 class App:
@@ -61,7 +70,8 @@ class App:
         self.store = Store(DATA, self.opts["model"], self.emb, self.vad)
         self.store.rebuild()
         self.recent: collections.deque = collections.deque(maxlen=max(1, int(self.opts["recent_buffer_size"])))
-        self._ids = itertools.count(1)
+        self.recent_dir = os.path.join(DATA, "recent")
+        self._ids = itertools.count(self.load_recent() + 1)
         self.languages = ["en"]
         self.token = os.environ.get("SUPERVISOR_TOKEN")
         self._stt_lock = asyncio.Lock()
@@ -79,9 +89,17 @@ class App:
             mx = o["max_speech_seconds"]
             if mx and len(sp) > mx * SR:
                 sp = sp[: int(mx * SR)]
-            scores = self.store.score(self.emb(sp), bool(o["cohort_norm"]))
-            d = decide(scores, speech, o["threshold_high"], o["threshold_low"], o["margin"], o["min_speech_seconds"])
+            norm = self.norm_active()
+            scores = self.store.score(self.emb(sp), norm)
+            hi, lo, mg, ms = (o[k] for k in (NORM_KEYS if norm else PLAIN_KEYS))
+            d = decide(scores, speech, hi, lo, mg, ms)
         return d, (time.perf_counter() - t0) * 1000
+
+    def norm_active(self) -> bool:
+        return bool(self.opts["cohort_norm"]) and self.store.cohort_size() >= MIN_COHORT
+
+    def active_settings(self) -> dict:
+        return {k: self.opts[k] for k in (NORM_KEYS if self.norm_active() else PLAIN_KEYS)}
 
     def label(self, d: Decision) -> str:
         if d.label == "speaker":
@@ -105,10 +123,83 @@ class App:
         item = {"id": next(self._ids), "time": time.time(), "text": text, "decision": d.label, "name": d.name,
                 "label": self.label(d), "score": None if d.score is None else round(d.score, 3),
                 "scores": {k: round(v, 3) for k, v in d.scores.items()}, "speech_s": round(d.speech_s, 2),
-                "ms": round(ms), "assigned": None, "rescore": None, "_audio": x[: int(MAX_KEEP_S * SR)].copy()}
+                "ms": round(ms), "assigned": None, "rescore": None}
         if self.opts["recent_buffer_size"]:
-            self.recent.appendleft(item)
+            evicted = self.recent[-1] if len(self.recent) == self.recent.maxlen else None
+            try:
+                os.makedirs(self.recent_dir, exist_ok=True)
+                with open(self.recent_wav(item), "wb") as f:
+                    f.write(encode_wav(x[: int(MAX_KEEP_S * SR)]))
+                self.recent.appendleft(item)
+                if evicted is not None:
+                    with contextlib.suppress(OSError):
+                        os.remove(self.recent_wav(evicted))
+                self.save_recent()
+            except OSError as e:
+                _LOG.warning("Cannot store recent utterance: %s", e)
         return item
+
+    def recent_wav(self, item: dict) -> str:
+        return os.path.join(self.recent_dir, f"{int(item['id'])}.wav")
+
+    def recent_audio(self, item: dict) -> np.ndarray:
+        return _read_audio(self.recent_wav(item))
+
+    def delete_recent(self, ids: list) -> int:
+        """Forget recent utterances (assigned samples are separate copies and stay)."""
+        ids = {str(i) for i in ids}
+        gone = [i for i in self.recent if str(i["id"]) in ids]
+        for i in gone:
+            self.recent.remove(i)
+            with contextlib.suppress(OSError):
+                os.remove(self.recent_wav(i))
+        if gone:
+            self.save_recent()
+        return len(gone)
+
+    def recent_disk(self) -> int:
+        try:
+            return sum(e.stat().st_size for e in os.scandir(self.recent_dir) if e.is_file())
+        except OSError:
+            return 0
+
+    def save_recent(self) -> None:
+        """Persist recent utterance metadata (audio is stored per item as <id>.wav)."""
+        if not self.opts["recent_buffer_size"]:
+            return
+        os.makedirs(self.recent_dir, exist_ok=True)
+        path = os.path.join(self.recent_dir, "recent.json")
+        with open(path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump([{k: v for k, v in i.items() if not k.startswith("_")} for i in self.recent], f,
+                      ensure_ascii=False)
+        os.replace(path + ".tmp", path)
+
+    def load_recent(self) -> int:
+        """Load persisted recent utterances; returns the highest id seen."""
+        if not os.path.isdir(self.recent_dir):
+            return 0
+        if not self.opts["recent_buffer_size"]:
+            shutil.rmtree(self.recent_dir, ignore_errors=True)
+            return 0
+        try:
+            with open(os.path.join(self.recent_dir, "recent.json"), encoding="utf-8") as f:
+                items = json.load(f)
+        except (OSError, ValueError):
+            items = []
+        keep = set()
+        for i in items[: self.recent.maxlen]:
+            try:
+                if not os.path.exists(self.recent_wav(i)):
+                    continue
+            except (KeyError, TypeError, ValueError):
+                continue
+            self.recent.append(i)
+            keep.add(os.path.basename(self.recent_wav(i)))
+        for fn in os.listdir(self.recent_dir):
+            if fn.endswith(".wav") and fn not in keep:
+                with contextlib.suppress(OSError):
+                    os.remove(os.path.join(self.recent_dir, fn))
+        return max((int(i["id"]) for i in self.recent), default=0)
 
     async def publish(self, item: dict) -> None:
         if not (self.opts["publish_sensor"] and self.token):
@@ -166,7 +257,7 @@ class App:
         task.add_done_callback(self._bg.discard)
 
     def rescore(self, item: dict) -> None:
-        d, _ = self.identify(item["_audio"])
+        d, _ = self.identify(self.recent_audio(item))
         item["rescore"] = {"decision": d.label, "name": d.name, "label": self.label(d),
                            "score": None if d.score is None else round(d.score, 3),
                            "scores": {k: round(v, 3) for k, v in d.scores.items()}}
@@ -192,6 +283,34 @@ class App:
             attribution=att, installed=True, version=__version__,
             models=[AsrModel(name="speaker-id", description="Upstream STT with speaker tag", attribution=att,
                              installed=True, languages=self.languages, version=__version__)])])
+
+    async def check_upstream(self) -> dict:
+        """Connect to the upstream STT and ask for its info (for the web UI)."""
+        t0 = time.perf_counter()
+        uri = self.opts["upstream_uri"]
+        try:
+            c = AsyncClient.from_uri(uri)
+            await asyncio.wait_for(c.connect(), timeout=5)
+            try:
+                await c.write_event(Describe().event())
+                while True:
+                    ev = await asyncio.wait_for(c.read_event(), timeout=5)
+                    if ev is None:
+                        raise ConnectionError("connection closed")
+                    if Info.is_type(ev.type):
+                        break
+            finally:
+                with contextlib.suppress(Exception):
+                    await c.disconnect()
+            info = Info.from_event(ev)
+            progs = [{"name": p.name, "version": p.version, "models": [m.name for m in p.models]} for p in info.asr]
+            langs = sorted({lang for p in info.asr for m in p.models for lang in m.languages})
+            return {"ok": bool(info.asr), "uri": uri, "ms": round((time.perf_counter() - t0) * 1000),
+                    "programs": progs, "languages": len(langs),
+                    "error": None if info.asr else "no speech-to-text service found at this address"}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "uri": uri, "ms": round((time.perf_counter() - t0) * 1000),
+                    "error": f"{type(e).__name__}: {e}" if str(e) else type(e).__name__}
 
     async def describe_upstream(self) -> None:
         for attempt in range(30):
@@ -328,18 +447,35 @@ def build_web(app: App) -> web.Application:
             raise ValueError("'files' must be a list of file names")
         return files
 
+    with open(os.path.join(WEB_DIR, "index.html"), encoding="utf-8") as f:
+        index_html = f.read().replace("__VERSION__", __version__)
+
     @r.get("/")
     async def index(_):
-        return web.FileResponse(os.path.join(WEB_DIR, "index.html"))
+        return web.Response(text=index_html, content_type="text/html", headers=NO_STORE)
 
     @r.get("/api/status")
-    async def status(_):
+    async def status(req):
         o = app.opts
+        people = app.store.people()
+        cohort_size: object = app.store.cohort_size()
+        if "ui" not in req.query:
+            # A pre-0.1.2 page (e.g. kept by a browser cache) is talking to us: give it the old sample format so
+            # it still works, and make it load the current page once (that old page renders cohort_size as HTML).
+            people = [dict(p, samples=[s["file"] for s in p["samples"]]) for p in people]
+            cohort_size = (f"{cohort_size}<img src=\"data:,\" style=\"display:none\" onerror=\"if(!/[?&]v=/"
+                           f".test(location.search))location.replace(location.pathname+'?v={__version__}')\">")
         return web.json_response({
             "version": __version__, "model": o["model"], "model_file": app.model_name,
             "upstream": o["upstream_uri"], "languages": len(app.languages),
-            "settings": {k: o[k] for k in TUNABLE}, "cohort_norm": o["cohort_norm"],
-            "cohort_size": app.store.cohort_size(), "people": app.store.people()})
+            "settings": app.active_settings(), "cohort_norm": o["cohort_norm"], "norm_active": app.norm_active(),
+            "min_cohort": MIN_COHORT, "recent_count": len(app.recent), "recent_limit": o["recent_buffer_size"],
+            "recent_disk_bytes": app.recent_disk(),
+            "cohort_size": cohort_size, "people": people})
+
+    @r.get("/api/upstream")
+    async def upstream(_):
+        return web.json_response(await app.check_upstream())
 
     @r.post("/api/settings")
     async def settings(req):
@@ -347,11 +483,22 @@ def build_web(app: App) -> web.Application:
             app.save_settings(await req.json())
         except Exception as e:  # noqa: BLE001
             return err(e)
-        return web.json_response({k: app.opts[k] for k in TUNABLE})
+        return web.json_response(app.active_settings())
 
     # -- recent utterances ---------------------------------------------------
     @r.get("/api/recent")
     async def recent(_):
+        for i in app.recent:  # the assigned sample may have been deleted from the sample lists meanwhile
+            a = i.get("assigned")
+            if a:
+                try:
+                    p = app.store.cohort_path(a["file"]) if a["target"] == "cohort" else \
+                        app.store.sample_path(a["target"], a["file"])
+                    gone = not os.path.exists(p)
+                except ValueError:
+                    gone = True
+                if gone:
+                    i["assigned"] = None
         return web.json_response([public(i) for i in app.recent])
 
     def find(rid: str):
@@ -362,7 +509,21 @@ def build_web(app: App) -> web.Application:
 
     @r.get("/api/recent/{rid}/audio")
     async def recent_audio(req):
-        return web.Response(body=encode_wav(find(req.match_info["rid"])["_audio"]), content_type="audio/wav")
+        item = find(req.match_info["rid"])
+        if not os.path.exists(app.recent_wav(item)):
+            raise web.HTTPNotFound()
+        return web.FileResponse(app.recent_wav(item), headers={"Content-Type": "audio/wav"})
+
+    @r.delete("/api/recent/{rid}")
+    async def recent_delete_one(req):
+        return web.json_response({"deleted": await loop_run(app.delete_recent, [req.match_info["rid"]])})
+
+    @r.post("/api/recent/delete")
+    async def recent_delete(req):
+        ids = (await req.json()).get("ids") or []
+        if not isinstance(ids, list):
+            return err(ValueError("'ids' must be a list"))
+        return web.json_response({"deleted": await loop_run(app.delete_recent, ids)})
 
     async def _unassign(item: dict) -> None:
         a = item.get("assigned")
@@ -382,16 +543,18 @@ def build_web(app: App) -> web.Application:
                 "original": {"decision": item["decision"], "label": item["label"], "score": item["score"],
                              "time": item["time"]}}
         try:
+            audio = await loop_run(app.recent_audio, item)
             await _unassign(item)
             if body.get("cohort"):
-                fn = await loop_run(partial(app.store.add_cohort, item["_audio"], "utterance", **meta))
+                fn = await loop_run(partial(app.store.add_cohort, audio, "utterance", **meta))
                 item["assigned"] = {"target": "cohort", "file": fn, "time": time.time()}
             else:
                 name = body.get("name", "")
-                fn = await loop_run(partial(app.store.add_sample, name, item["_audio"], "utterance", **meta))
+                fn = await loop_run(partial(app.store.add_sample, name, audio, "utterance", **meta))
                 item["assigned"] = {"target": name, "file": fn, "time": time.time()}
             await loop_run(app.rescore, item)
-        except ValueError as e:
+            await loop_run(app.save_recent)
+        except (ValueError, OSError) as e:
             return err(e)
         return web.json_response(public(item))
 
@@ -401,7 +564,8 @@ def build_web(app: App) -> web.Application:
         try:
             await _unassign(item)
             await loop_run(app.rescore, item)
-        except ValueError as e:
+            await loop_run(app.save_recent)
+        except (ValueError, OSError) as e:
             return err(e)
         return web.json_response(public(item))
 
@@ -542,7 +706,14 @@ def build_web(app: App) -> web.Application:
         except OSError as e:
             return err(e, 502)
 
-    w = web.Application(client_max_size=64 * 1024 * 1024)
+    @web.middleware
+    async def no_cache(req, handler):
+        resp = await handler(req)
+        if req.path.startswith("/api/") and resp.content_type == "application/json":
+            resp.headers.update(NO_STORE)
+        return resp
+
+    w = web.Application(client_max_size=64 * 1024 * 1024, middlewares=[no_cache])
     w.add_routes(r)
     return w
 

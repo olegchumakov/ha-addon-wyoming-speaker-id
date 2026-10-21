@@ -51,3 +51,12 @@ jobs:
       - uses: actions/checkout@v7
       - name: ShellCheck
         run: shellcheck -x wyoming_speaker_id/rootfs/etc/services.d/speaker-id/run wyoming_speaker_id/rootfs/etc/services.d/speaker-id/finish
+
+  web-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Web UI render test (jsdom)
+        run: |
+          npm install --no-save --no-package-lock jsdom
+          node tests/ui/render.test.mjs

@@ -1,48 +1,75 @@
 configuration:
   upstream_uri:
-    name: Upstream STT
-    description: Wyoming speech-to-text service that does the transcription (e.g. tcp://core-whisper:10300).
+    name: Upstream STT (Whisper) address
+    description: >-
+      Where the audio is sent to turn speech into text. Usually the Whisper add-on:
+      tcp://core-whisper:10300. Change it only if your speech-to-text runs somewhere else.
+      You can test the connection with the button in the add-on web UI.
   model:
-    name: Speaker model
-    description: Speaker embedding model. Changing it recomputes all voiceprints from the stored samples.
+    name: Voice recognition model
+    description: >-
+      What the add-on uses to recognize voices. Keep redimnet2_b2 — it is the most accurate. When you switch
+      models you don't need to record samples again: everything is recalculated, but re-check the sensitivity.
   threshold_high:
-    name: Threshold "known"
-    description: Minimum similarity to tag the transcript with a person's name.
+    name: Recognize by name from
+    description: >-
+      How similar a voice must be to a person's samples to say their name (0 to 1). Higher = fewer mix-ups
+      but more "unknown"; lower = the other way round. Usually 0.40–0.55. Easiest to tune with the slider
+      in the web UI while looking at the "similarity" of recent utterances.
   threshold_low:
-    name: Threshold "guest"
-    description: Below this similarity the speaker is a guest; between the two thresholds the result is "unknown".
+    name: Guest if similarity is below
+    description: >-
+      If a voice is less similar than this to everyone the add-on knows, the speaker is treated as a guest.
+      Between this value and "Recognize by name from" the answer is "unknown". Usually 0.25–0.35.
   margin:
-    name: Margin
-    description: Required lead of the best person over the second best.
+    name: Lead over the next person
+    description: >-
+      How far the most similar person must be ahead of the next one to say their name. Helps not to confuse
+      similar voices (e.g. relatives). If household members get mixed up, raise it to 0.10–0.15. Usually 0.08.
   min_speech_seconds:
-    name: Minimum speech (s)
-    description: Shorter commands are not identified and get the "unknown" label.
+    name: Minimum speech, seconds
+    description: >-
+      Very short phrases ("yes", "stop") are too short to recognize a voice reliably; they get the "unknown"
+      answer. Usually 0.6.
   tag_template:
-    name: Tag template
-    description: How the transcript is rewritten. Placeholders {name} and {text}.
+    name: How to label the text for the assistant
+    description: >-
+      How the speaker's name is added to the recognized text that the voice assistant receives.
+      {name} = who is speaking, {text} = what was said. Example: [speaker: {name}] {text}
   guest_label:
-    name: Guest label
-    description: Name used for unrecognized voices.
+    name: Word for a stranger's voice
+    description: What to write instead of a name when the voice is not from your household, e.g. "guest".
   unknown_label:
-    name: Unknown label
-    description: Name used when the result is uncertain or the command is too short.
+    name: Word when not sure
+    description: >-
+      What to write instead of a name when the voice could not be determined (too short or similarity between
+      the two limits), e.g. "unknown".
   tag_unknown:
-    name: Tag uncertain results
-    description: If off, uncertain/short commands are passed through without a tag.
+    name: Label phrases when not sure
+    description: >-
+      On: the assistant sees "unknown" when the voice was not determined. Off: such phrases are passed
+      to the assistant without a label.
   cohort_norm:
-    name: Cohort normalization
-    description: Normalize scores against uploaded clips of other people (AS-norm). Thresholds become z-scores.
+    name: Compare with other voices
+    description: >-
+      When on, a voice is also compared with recordings of strangers from the "Other voices" section of the
+      web UI, so household members are confused with strangers less often. Needs at least 20–30 such
+      recordings (works from 10; until then the normal mode is used). This mode has its own sensitivity
+      values that are switched automatically (usually 2–3 for "Recognize by name from"). If unsure, leave off.
   publish_sensor:
-    name: Publish sensor
-    description: Update a Home Assistant sensor with the last speaker.
+    name: '"Who spoke" sensor'
+    description: >-
+      Update a Home Assistant sensor with the name of the last speaker, for automations and dashboards.
   sensor_entity:
-    name: Sensor entity
-    description: Entity id of the sensor.
+    name: Sensor name
+    description: The entity id of that sensor in Home Assistant. Usually no need to change.
   recent_buffer_size:
-    name: Recent utterances
-    description: How many recent utterances (with audio, in memory only) are kept for the web UI.
+    name: How many recent utterances to keep
+    description: >-
+      How many recent utterances (text and voice recording) are kept in the web UI so you can listen to them
+      and assign them to a person. They survive restarts; older ones are deleted automatically. 0 = keep none.
   log_level:
-    name: Log level
-    description: Logging verbosity.
+    name: Log detail
+    description: How much detail to write to the add-on log. Usually info; debug for troubleshooting.
 network:
-  10310/tcp: Wyoming STT (only needed for access from outside Home Assistant)
+  10310/tcp: Wyoming STT port (only needed when connecting from outside this Home Assistant)

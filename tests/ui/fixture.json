@@ -1,0 +1,22 @@
+{
+  "api/status?ui=2": {"version": "TEST", "model": "redimnet2_b2", "model_file": "m.onnx", "upstream": "tcp://core-whisper:10300",
+    "languages": 3, "settings": {"threshold_high": 0.45, "threshold_low": 0.3, "margin": 0.08, "min_speech_seconds": 0.6},
+    "cohort_norm": false, "norm_active": false, "min_cohort": 10, "recent_count": 2, "recent_limit": 30, "recent_disk_bytes": 123456,
+    "cohort_size": 2,
+    "people": [
+      {"name": "Person A", "usable": 2, "samples": [
+        {"file": "upload_20260101_120000_001.wav", "duration": 2.5, "created": 1767268800, "text": "turn on the light", "source": "upload"},
+        {"file": "utterance_20260101_120100_002.wav", "duration": 3.1, "created": 1767268860, "text": null, "source": "utterance",
+         "original": {"decision": "guest", "label": "guest", "score": 0.2, "time": 1767268850}}]},
+      {"name": "Person 'B'", "usable": 0, "samples": []}]},
+  "api/cohort": {"cohort_norm": false, "usable": 2, "samples": [
+    {"file": "cohort_upload_20260101_1.wav", "duration": 7.2, "created": 1767268800, "text": "a stranger talking", "source": "upload"},
+    {"file": "cohort_1767268800000.wav", "duration": 5.0, "created": 1767268800, "text": null, "source": "upload"}]},
+  "api/recent": [
+    {"id": 2, "time": 1767268900, "text": "what time is it", "decision": "guest", "name": null, "label": "guest", "score": 0.21,
+     "scores": {"Person A": 0.21}, "speech_s": 1.2, "ms": 40, "assigned": {"target": "Person A", "file": "u.wav", "time": 1767268950},
+     "rescore": {"decision": "speaker", "name": "Person A", "label": "Person A", "score": 0.61, "scores": {}}},
+    {"id": 1, "time": 1767268800, "text": "hello", "decision": "speaker", "name": "Person A", "label": "Person A", "score": 0.55,
+     "scores": {"Person A": 0.55}, "speech_s": 1.5, "ms": 40, "assigned": null, "rescore": null}],
+  "api/upstream": {"ok": true, "uri": "tcp://core-whisper:10300", "ms": 5, "programs": [{"name": "faster-whisper", "version": "2.0", "models": ["small"]}], "languages": 3, "error": null}
+}

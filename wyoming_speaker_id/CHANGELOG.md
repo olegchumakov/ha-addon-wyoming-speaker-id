@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.3
+
+- Fix: after updating, a browser could keep showing the previous version of the web UI (it was cached), so
+  sample names showed as "[object Object]" and the new lists were missing. The page is now never cached,
+  API answers are not cached either, a page from an older version reloads itself once, and an outdated page
+  shows a notice.
+- Recent utterances (text, result, audio, assignment) are stored in `/data/recent/` and survive restarts;
+  only the configured number is kept, older ones are deleted automatically. They can be deleted one by one
+  or in bulk (voice samples already assigned stay). Disk usage is shown.
+- Web UI: "Test connection" for the speech-to-text service (Whisper) with its name, version and languages.
+- "Compare with other voices" (formerly "cohort normalization") now uses its own sensitivity values that are
+  switched automatically, so nothing has to be re-tuned when it is turned on or off.
+- All option names and descriptions, web UI texts and docs rewritten in plain language (en/ru).
+- CI: web UI render test (jsdom) against sample API answers.
+
 ## 0.1.2
 
 - Web UI: cohort management – list of cohort clips with file, date, duration and text, playback,

@@ -1,6 +1,6 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Speaker ID</title>
+<meta name="ui-version" content="__VERSION__"><title>Speaker ID</title>
 <style>
 :root{--bg:#111418;--card:#1c2128;--fg:#e6e6e6;--mut:#9aa4af;--acc:#03a9f4;--ok:#4caf50;--warn:#ff9800;--bad:#f44336;--asg:#9c27b0}
 @media (prefers-color-scheme: light){:root{--bg:#f5f5f5;--card:#fff;--fg:#212121;--mut:#666}}
@@ -15,47 +15,58 @@ button{cursor:pointer}button.p{background:var(--acc);border-color:var(--acc);col
 button:disabled{opacity:.5;cursor:default}
 .b{padding:2px 8px;border-radius:10px;font-size:12px;white-space:nowrap}.speaker{background:#4caf5033;color:var(--ok)}.guest{background:#f4433633;color:var(--bad)}
 .uncertain,.short{background:#ff980033;color:var(--warn)}.asg{background:#9c27b033;color:var(--asg)}
+.err{background:#f4433622;border:1px solid var(--bad);color:var(--bad);border-radius:8px;padding:8px 12px;margin-bottom:12px}.okc{color:var(--ok)}.badc{color:var(--bad)}
 .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
-.sl{display:grid;grid-template-columns:170px 1fr 60px;gap:8px;align-items:center;max-width:600px}
+.sl{display:grid;grid-template-columns:250px 1fr 60px;gap:8px;align-items:center;max-width:700px}
 details{margin:6px 0}audio{height:28px;vertical-align:middle;max-width:220px}.txt{max-width:420px}.empty{font-style:italic}
 </style></head><body><main>
 <h1>Speaker ID</h1>
-<div class="card"><div class="row mut" id="st"></div></div>
+<div id="err" class="err" hidden></div>
+<div class="card"><div class="row mut" id="st"></div>
+<div class="row mut" style="margin-top:8px"><span data-t="upstreamL">Upstream STT:</span><span id="up">…</span><button id="upBtn" data-t="test">Test connection</button></div></div>
 
 <div class="card"><h2 data-t="recent">Recent utterances</h2>
-<div class="mut" data-t="recentHint">Assign an utterance to a person to enroll it (the more varied, the better: 20+ per person). Assigning again moves it; "undo" removes the sample.</div>
-<table><thead><tr><th data-t="time">Time</th><th data-t="result">Result</th><th data-t="score">Score</th><th data-t="text">Text</th><th></th><th data-t="assign">Assign</th></tr></thead><tbody id="recent"></tbody></table></div>
+<div class="mut" data-t="recentHint">What was said to the assistant recently and who it thought was speaking. To teach it a voice, pick the right person in the last column: the phrase becomes a voice sample. The more different phrases, the better (20+ per person). "Undo" takes the sample back.</div>
+<div class="row" style="margin:6px 0"><button class="d" id="recDel" data-t="delSel">Delete selected</button><span class="mut" id="recInfo"></span></div>
+<table id="tbl_r"><thead><tr><th><input type="checkbox" onchange="document.querySelectorAll('#tbl_r tbody input').forEach(c=>c.checked=this.checked)"></th><th data-t="time">Time</th><th data-t="result">Result</th><th data-t="score">Similarity</th><th data-t="text">Text</th><th></th><th data-t="assign">Whose voice?</th><th></th></tr></thead><tbody id="recent"></tbody></table></div>
 
-<div class="card"><h2 data-t="people">People</h2>
+<div class="card"><h2 data-t="people">People and their voice samples</h2>
 <div class="row"><input type="text" id="newName" placeholder="Name"><button class="p" id="addBtn" data-t="add">Add person</button></div>
 <div id="people"></div></div>
 
-<div class="card"><h2 data-t="tuning">Thresholds</h2><div id="sliders"></div>
+<div class="card"><h2 data-t="tuning">Recognition sensitivity</h2><div class="mut" id="normInfo"></div><div id="sliders"></div>
 <div class="row" style="margin-top:8px"><button class="p" id="saveBtn" data-t="save">Save</button><span class="mut" id="saved"></span></div>
-<div class="mut" data-t="tuneHint" style="margin-top:8px">Tip: look at scores of your own utterances vs. TV/guests in the list above and set "high" between them.</div></div>
+<div class="mut" data-t="tuneHint" style="margin-top:8px">How to tune: in "Recent utterances" compare the similarity of your own phrases with that of TV or guests, and put "Recognized" between them. Higher = fewer mix-ups but more "unknown"; lower = the other way round.</div></div>
 
-<div class="card"><h2 data-t="cohort">Cohort (optional score normalization)</h2>
-<div class="mut" data-t="cohortHint">Upload 50+ short clips of other people (not household members). Enable "cohort_norm" in the add-on configuration; scores then become z-scores and thresholds must be raised (typically high 3-5).</div>
+<div class="card"><h2 data-t="cohort">Other voices (for accuracy, optional)</h2>
+<div class="mut" data-t="cohortHint">Recordings of people who are NOT in your household: guests, TV, radio, podcasts. They are used only if "Compare with other voices" is switched on in the add-on configuration: then a voice is also compared with these recordings, so household members are confused with strangers less often. You need at least 20–30 recordings (it starts working from 10). Easiest way: in "Recent utterances" send TV speech to "other voices". Sensitivity for this mode is set separately and automatically.</div>
 <div class="row" style="margin:8px 0"><input type="file" id="cohortFiles" multiple accept="audio/*"><button id="cohortBtn" data-t="upload">Upload</button><span id="cohortInfo" class="mut"></span></div>
 <div id="cohort"></div></div>
 </main>
 <script>
-const RU={recent:"Последние фразы",recentHint:"Назначьте фразу человеку, чтобы добавить её в образцы (чем разнообразнее, тем лучше: 20+ на человека). Повторное назначение переносит образец; «отменить» удаляет его.",time:"Время",result:"Результат",score:"Оценка",text:"Текст",assign:"Назначить",people:"Люди",add:"Добавить",tuning:"Пороги",save:"Сохранить",tuneHint:"Подсказка: сравните оценки своих фраз и фраз ТВ/гостей в списке выше и поставьте «high» между ними.",cohort:"Когорта (необязательная нормализация оценок)",cohortHint:"Загрузите 50+ коротких записей чужих людей (не членов семьи). Включите «cohort_norm» в настройках дополнения; оценки станут z-оценками, пороги придётся поднять (обычно high 3–5).",upload:"Загрузить",samples:"образцов",del:"Удалить",delSel:"Удалить выбранные",cohortSel:"→ в когорту",choose:"— кому —",saved:"Сохранено",confirmDel:"Удалить человека и все его образцы?",confirmDelN:"Удалить выбранные записи: ",file:"Файл",date:"Дата",dur:"Длит.",transcribe:"Распознать",transcribeAll:"Распознать все без текста",noText:"нет текста",emptyText:"(пусто)",assignedTo:"назначено",cohortName:"когорта",undo:"отменить",now:"сейчас",selectAll:"все",usable:"годных",working:"…",orig:"исходно"};
+const RU={recent:"Последние фразы",recentHint:"Что недавно говорили ассистенту и кого он узнал. Чтобы научить его голосу, выберите нужного человека в последнем столбце — фраза станет образцом голоса. Чем больше разных фраз, тем лучше (20+ на человека). «Отменить» забирает образец обратно.",time:"Время",result:"Результат",score:"Похожесть",text:"Текст",assign:"Чей голос?",people:"Люди и образцы их голоса",add:"Добавить",tuning:"Чувствительность распознавания",save:"Сохранить",tuneHint:"Как настроить: в «Последних фразах» сравните похожесть своих фраз и фраз ТВ или гостей и поставьте «Узнавать по имени» между ними. Выше — реже путает, но чаще «неизвестно»; ниже — наоборот.",cohort:"Чужие голоса (для точности, необязательно)",cohortHint:"Записи людей, которые НЕ живут с вами: гости, ТВ, радио, подкасты. Используются, только если в настройках дополнения включено «Сравнивать с чужими голосами»: тогда голос сравнивается ещё и с этими записями, и свои реже путаются с чужими. Нужно хотя бы 20–30 записей (работает от 10). Проще всего — в «Последних фразах» отправлять речь из ТВ в «чужие голоса». Чувствительность для этого режима задаётся отдельно и автоматически.",upload:"Загрузить",samples:"образцов",del:"Удалить",delSel:"Удалить выбранные",cohortSel:"→ в чужие голоса",choose:"— кому —",saved:"Сохранено",confirmDel:"Удалить человека и все его образцы?",confirmDelN:"Удалить выбранные записи: ",file:"Файл",date:"Дата",dur:"Длит.",transcribe:"Распознать",transcribeAll:"Распознать все без текста",noText:"нет текста",emptyText:"(пусто)",assignedTo:"назначено",cohortName:"чужие голоса",undo:"отменить",now:"сейчас",selectAll:"все",usable:"годных",working:"…",orig:"исходно",upstreamL:"Whisper / STT:",test:"Проверить связь",connected:"подключено",langs:"языков",notConnected:"нет связи",stale:"Страница устарела (интерфейс %1, дополнение %2) — перезагружаю…",loadErr:"Ошибка загрузки: ",delRec:"Удалить из списка (образцы голоса остаются)",onDisk:"на диске",confirmDelR:"Удалить из списка (уже назначенные образцы голоса останутся): ",otherV:"чужие голоса",modelL:"модель",inUse:"используются",hiL:"Узнавать по имени от",loL:"Гость, если ниже",mgL:"Отрыв от следующего человека",msL:"Минимум речи, с",normOn:"Включено «Сравнивать с чужими голосами»: это отдельные значения для этого режима (другая шкала, для «Узнавать по имени» обычно 2–3).",normWait:"«Сравнивать с чужими голосами» включено, но нужно хотя бы %1 записей в «Чужих голосах» — пока работает обычный режим."};
 const L=navigator.language.startsWith("ru")?RU:{};const t=(k,d)=>L[k]||d;
 document.querySelectorAll("[data-t]").forEach(e=>{if(L[e.dataset.t])e.textContent=L[e.dataset.t]});
-const LABELS={threshold_high:"high",threshold_low:"low",margin:"margin",min_speech_seconds:"min speech, s"};
+const LABELS={threshold_high:["hiL","Recognized (name) from"],threshold_low:["loL","Guest below"],margin:["mgL","Lead over the next person"],min_speech_seconds:["msL","Minimum speech, s"],threshold_high_norm:["hiL","Recognized (name) from"],threshold_low_norm:["loL","Guest below"],margin_norm:["mgL","Lead over the next person"]};
 let S=null;const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const enc=s=>encodeURIComponent(s).replace(/'/g,"%27");
+const UIV=document.querySelector('meta[name="ui-version"]').content;
+const showErr=m=>{$("err").hidden=!m;$("err").textContent=m||""};
+const norm=s=>typeof s=="string"?{file:s}:(s||{});
 async function api(p,o){const r=await fetch(p,o);const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||r.status);return j}
 const post=(p,b)=>api(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})});
+const fmtSize=b=>b>=1048576?(b/1048576).toFixed(1)+" MB":Math.ceil((b||0)/1024)+" KB";
+const fmtWhen=ts=>{const d=new Date(ts*1000);return d.toDateString()==new Date().toDateString()?d.toLocaleTimeString():d.toLocaleString()};
+async function delRecent(ids){if(!ids.length||!confirm(t("confirmDelR","Delete from the list (voice samples already assigned stay): ")+ids.length))return;
+ try{await post("api/recent/delete",{ids})}catch(e){alert(e)}load()}
 const fmtDate=ts=>ts?new Date(ts*1000).toLocaleString():"";
 const badge=(cls,txt)=>`<span class="b ${cls}">${esc(txt)}</span>`;
 const textCell=(s,kind,owner)=>{if(s.text===null||s.text===undefined)return `<span class="mut empty">${t("noText","no text")}</span> <button onclick="tr('${kind}','${enc(owner)}','${enc(s.file)}',this)">${t("transcribe","Transcribe")}</button>`;
  return s.text===""?`<span class="mut empty">${t("emptyText","(empty)")}</span>`:esc(s.text)};
 const origCell=s=>s.original?` <span class="mut">${t("orig","originally")}: ${esc(s.original.label)}${s.original.score!=null?" "+s.original.score:""}</span>`:"";
 // sample table shared by people and cohort; kind = "p" (person) or "c" (cohort)
-function sampleTable(kind,owner,list){const id=`t_${kind}_${enc(owner)}`;const base=kind=="c"?"api/cohort/":`api/people/${enc(owner)}/samples/`;
+function sampleTable(kind,owner,list,id){list=(list||[]).map(norm);const base=kind=="c"?"api/cohort/":`api/people/${enc(owner)}/samples/`;
  return `<div class="row" style="margin:6px 0"><button class="d" onclick="delSel('${kind}','${enc(owner)}','${id}')">${t("delSel","Delete selected")}</button>
  <button onclick="trAll('${kind}','${enc(owner)}','${id}',this)">${t("transcribeAll","Transcribe all without text")}</button></div>
  <table id="${id}"><thead><tr><th><input type="checkbox" onchange="document.querySelectorAll('#${id} tbody input').forEach(c=>c.checked=this.checked)" title="${t("selectAll","all")}"></th>
@@ -64,25 +75,38 @@ function sampleTable(kind,owner,list){const id=`t_${kind}_${enc(owner)}`;const b
  <td class="mut">${fmtDate(s.created)}</td><td>${s.duration??"—"}s</td><td class="txt">${textCell(s,kind,owner)}${origCell(s)}</td>
  <td><audio controls preload="none" src="${base}${enc(s.file)}"></audio></td>
  <td><button class="d" onclick="delFiles('${kind}','${enc(owner)}',['${enc(s.file)}'])">✕</button></td></tr>`).join("")}</tbody></table>`}
-async function load(){S=await api("api/status");
- $("st").innerHTML=`<span>v${esc(S.version)}</span><span>model: <b>${esc(S.model)}</b></span><span>upstream: ${esc(S.upstream)}</span><span>cohort: ${S.cohort_size}${S.cohort_norm?" (on)":""}</span>`;
+async function load(){try{await render()}catch(e){showErr(t("loadErr","Loading failed: ")+e.message)}}
+async function render(){S=await api("api/status?ui=2");
+ if(S.version&&UIV!=="__VERSION__"&&S.version!==UIV){const k="sid-reload-"+S.version;showErr(t("stale","This page is outdated (UI %1, add-on %2) — reloading…").replace("%1",UIV).replace("%2",S.version));
+  if(!sessionStorage.getItem(k)){sessionStorage.setItem(k,"1");location.replace(location.pathname+"?v="+encodeURIComponent(S.version))}return}
+ showErr("");
+ $("normInfo").textContent=S.norm_active?t("normOn","\"Compare with other voices\" is on: these are its own sensitivity values (a different scale, usually 2–3 for \"Recognized\").")
+  :(S.cohort_norm?t("normWait","\"Compare with other voices\" is switched on but needs at least %1 recordings in \"Other voices\" — until then the normal mode is used.").replace("%1",S.min_cohort):"");
+ $("st").innerHTML=`<span>v${esc(S.version)}</span><span>${t("modelL","model")}: <b>${esc(S.model)}</b></span><span>${t("otherV","other voices")}: ${S.cohort_size}${S.norm_active?" ("+t("inUse","in use")+")":""}</span>`;
  const open=new Set([...document.querySelectorAll("#people details[open]")].map(d=>d.dataset.name));
- $("people").innerHTML=S.people.map(p=>`<details data-name="${esc(p.name)}" ${open.has(p.name)?"open":""}><summary><b>${esc(p.name)}</b> — ${p.usable}/${p.samples.length} ${t("samples","samples")}</summary>
+ $("people").innerHTML=S.people.map((p,idx)=>`<details data-name="${esc(p.name)}" ${open.has(p.name)?"open":""}><summary><b>${esc(p.name)}</b> — ${p.usable}/${p.samples.length} ${t("samples","samples")}</summary>
  <div class="row" style="margin:8px 0"><input type="file" multiple accept="audio/*" id="f_${enc(p.name)}"><button onclick="up('${enc(p.name)}')">${t("upload","Upload WAV")}</button>
- <button class="d" onclick="delP('${enc(p.name)}')">${t("del","Delete")}</button></div>${sampleTable("p",p.name,p.samples)}</details>`).join("");
- if(!$("sliders").dataset.init){$("sliders").dataset.init=1;$("sliders").innerHTML=Object.entries(S.settings).map(([k,v])=>{const mx=k=="min_speech_seconds"?5:(S.cohort_norm&&k.startsWith("threshold")?10:1),mn=k.startsWith("threshold")&&!S.cohort_norm?-0.2:0;
- return `<div class="sl"><span>${LABELS[k]}</span><input type="range" min="${mn}" max="${mx}" step="0.01" value="${v}" id="s_${k}" oninput="this.nextElementSibling.textContent=this.value"><span>${v}</span></div>`}).join("")}
- loadCohort();loadRecent()}
-async function loadCohort(){const C=await api("api/cohort");$("cohortInfo").textContent=`${C.samples.length} (${t("usable","usable")}: ${C.usable})`;$("cohort").innerHTML=sampleTable("c","",C.samples)}
+ <button class="d" onclick="delP('${enc(p.name)}')">${t("del","Delete")}</button></div>${sampleTable("p",p.name,p.samples,"tbl_p_"+idx)}</details>`).join("");
+ if(!$("sliders").dataset.init){$("sliders").dataset.init=1;$("sliders").innerHTML=Object.entries(S.settings).map(([k,v])=>{const nz=k.endsWith("_norm"),mx=k=="min_speech_seconds"?5:(nz?(k.startsWith("margin")?3:8):1),mn=k.startsWith("threshold")?(nz?-1:-0.2):0;
+ return `<div class="sl"><span>${esc(t(LABELS[k][0],LABELS[k][1]))}</span><input type="range" min="${mn}" max="${mx}" step="0.01" value="${v}" id="s_${k}" oninput="this.nextElementSibling.textContent=this.value"><span>${v}</span></div>`}).join("")}
+ await Promise.all([loadCohort(),loadRecent()])}
+async function loadCohort(){const C=await api("api/cohort");$("cohortInfo").textContent=`${C.samples.length} (${t("usable","usable")}: ${C.usable})`;$("cohort").innerHTML=sampleTable("c","",C.samples,"tbl_c")}
 function resultCell(i){let h=badge(i.decision,i.label);
- if(i.assigned)h+=` → ${badge("asg",t("assignedTo","assigned to")+" "+(i.assigned.target=="cohort"?t("cohortName","cohort"):i.assigned.target))}`;
+ if(i.assigned)h+=` → ${badge("asg",t("assignedTo","assigned to")+" "+(i.assigned.target=="cohort"?t("cohortName","other voices"):i.assigned.target))}`;
  if(i.rescore)h+=`<div class="mut">${t("now","now")}: ${esc(i.rescore.label)}${i.rescore.score!=null?" "+i.rescore.score:""}</div>`;return h}
+async function testUp(){$("up").textContent="…";try{const u=await api("api/upstream");
+ $("up").innerHTML=u.ok?`<span class="okc">✓ ${t("connected","connected")}</span> ${esc(u.uri)} — ${esc(u.programs.map(p=>p.name+(p.version?" "+p.version:"")).join(", "))}, ${u.languages} ${t("langs","languages")}, ${u.ms} ms`
+  :`<span class="badc">✗ ${t("notConnected","not connected")}</span> ${esc(u.uri)} — ${esc(u.error)}`}catch(e){$("up").innerHTML=`<span class="badc">✗ ${esc(e.message)}</span>`}}
+$("upBtn").onclick=testUp;
+$("recDel").onclick=()=>delRecent([...document.querySelectorAll("#tbl_r tbody tr")].filter(r=>r.querySelector("input").checked).map(r=>+r.dataset.id));
 async function loadRecent(){if(document.activeElement&&document.activeElement.tagName=="SELECT")return;const R=await api("api/recent");
- const opts=`<option value="">${t("choose","— to —")}</option>`+S.people.map(p=>`<option value="${esc(p.name)}">${esc(p.name)}</option>`).join("")+`<option value="__cohort">${t("cohortSel","→ cohort")}</option>`;
- $("recent").innerHTML=R.map(i=>`<tr><td class="mut">${new Date(i.time*1000).toLocaleTimeString()}</td><td>${resultCell(i)}</td>
+ const opts=`<option value="">${t("choose","— to —")}</option>`+S.people.map(p=>`<option value="${esc(p.name)}">${esc(p.name)}</option>`).join("")+`<option value="__cohort">${t("cohortSel","→ other voices")}</option>`;
+ const chk=new Set([...document.querySelectorAll("#tbl_r tbody tr")].filter(r=>r.querySelector("input").checked).map(r=>r.dataset.id));
+ $("recent").innerHTML=R.map(i=>`<tr data-id="${i.id}"><td><input type="checkbox" ${chk.has(String(i.id))?"checked":""}></td><td class="mut">${fmtWhen(i.time)}</td><td>${resultCell(i)}</td>
  <td title="${esc(JSON.stringify(i.scores))}">${i.score??"—"}<div class="mut">${i.speech_s}s</div></td><td>${esc(i.text)}</td>
  <td><audio controls preload="none" src="api/recent/${i.id}/audio"></audio></td>
- <td><select onchange="assign(${i.id},this)">${opts}</select>${i.assigned?` <button onclick="unassign(${i.id})">${t("undo","undo")}</button>`:""}</td></tr>`).join("")}
+ <td><select onchange="assign(${i.id},this)">${opts}</select>${i.assigned?` <button onclick="unassign(${i.id})">${t("undo","undo")}</button>`:""}</td><td><button class="d" title="${t("delRec","Delete from this list (voice samples stay)")}" onclick="delRecent([${i.id}])">✕</button></td></tr>`).join("");
+ $("recInfo").textContent=`${R.length} / ${S.recent_limit}, ${t("onDisk","on disk")} ≈ ${fmtSize(S.recent_disk_bytes)}`}
 async function assign(id,sel){const v=sel.value;if(!v)return;sel.disabled=true;try{await post(`api/recent/${id}/assign`,v=="__cohort"?{cohort:true}:{name:v})}catch(e){alert(e)}sel.blur();load()}
 async function unassign(id){try{await post(`api/recent/${id}/unassign`)}catch(e){alert(e)}load()}
 async function up(n){const fd=new FormData();for(const f of $("f_"+n).files)fd.append("file",f,f.name);const r=await api(`api/people/${n}/upload`,{method:"POST",body:fd});if(r.failed.length)alert(r.failed.join("\n"));load();setTimeout(load,8000)}
@@ -97,6 +121,6 @@ async function trAll(kind,owner,id,btn){btn.disabled=true;const bs=[...document.
 $("addBtn").onclick=async()=>{try{await post("api/people",{name:$("newName").value});$("newName").value="";load()}catch(e){alert(e)}};
 $("saveBtn").onclick=async()=>{const b={};for(const k of Object.keys(S.settings))b[k]=parseFloat($("s_"+k).value);await post("api/settings",b);$("saved").textContent=t("saved","Saved");setTimeout(()=>$("saved").textContent="",2000)};
 $("cohortBtn").onclick=async()=>{const fd=new FormData();for(const f of $("cohortFiles").files)fd.append("file",f,f.name);const r=await api("api/cohort/upload",{method:"POST",body:fd});if(r.failed&&r.failed.length)alert(r.failed.join("\n"));load();setTimeout(load,8000)};
-load();setInterval(loadRecent,5000);
+load();testUp();setInterval(()=>loadRecent().catch(e=>showErr(t("loadErr","Loading failed: ")+e.message)),5000);
 </script>
 </body></html>
