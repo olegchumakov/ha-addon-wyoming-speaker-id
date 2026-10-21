@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4
+
+- Option names and descriptions, web UI texts and docs are back to the 0.1.2 wording. Only "Compare with
+  other voices" (`cohort_norm`) keeps a plain description, and texts describe the 0.1.3 features (recent
+  utterances survive restarts, connection test, automatic thresholds for the cohort mode).
+
 ## 0.1.3
 
 - Fix: after updating, a browser could keep showing the previous version of the web UI (it was cached), so
