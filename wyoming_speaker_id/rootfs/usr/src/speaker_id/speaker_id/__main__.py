@@ -22,7 +22,7 @@ from wyoming.server import AsyncEventHandler, AsyncServer
 
 from . import __version__, models
 from .embed import SR, Embedder, Vad, decode_audio, encode_wav, pcm16_to_float
-from .store import Decision, Store, decide
+from .store import Decision, Store, decide, write_meta
 
 _LOG = logging.getLogger("speaker_id")
 DATA = os.environ.get("SPEAKER_ID_DATA", "/data")
@@ -64,6 +64,8 @@ class App:
         self._ids = itertools.count(1)
         self.languages = ["en"]
         self.token = os.environ.get("SUPERVISOR_TOKEN")
+        self._stt_lock = asyncio.Lock()
+        self._bg: set = set()
 
     # -- identification ------------------------------------------------------
     def identify(self, x: np.ndarray) -> tuple[Decision, float]:
@@ -103,7 +105,7 @@ class App:
         item = {"id": next(self._ids), "time": time.time(), "text": text, "decision": d.label, "name": d.name,
                 "label": self.label(d), "score": None if d.score is None else round(d.score, 3),
                 "scores": {k: round(v, 3) for k, v in d.scores.items()}, "speech_s": round(d.speech_s, 2),
-                "ms": round(ms), "_audio": x[: int(MAX_KEEP_S * SR)].copy()}
+                "ms": round(ms), "assigned": None, "rescore": None, "_audio": x[: int(MAX_KEEP_S * SR)].copy()}
         if self.opts["recent_buffer_size"]:
             self.recent.appendleft(item)
         return item
@@ -123,6 +125,51 @@ class App:
                     _LOG.warning("Sensor update failed: %s", r.status)
         except Exception as e:  # noqa: BLE001
             _LOG.warning("Sensor update error: %s", e)
+
+    async def transcribe(self, x: np.ndarray) -> str:
+        """Transcribe audio with the upstream STT (used for samples without text)."""
+        async with self._stt_lock:
+            c = AsyncClient.from_uri(self.opts["upstream_uri"])
+            await c.connect()
+            try:
+                await c.write_event(Transcribe().event())
+                await c.write_event(AudioStart(rate=SR, width=2, channels=1).event())
+                pcm = (np.clip(x, -1, 1) * 32767).astype("<i2").tobytes()
+                for i in range(0, len(pcm), SR // 5 * 2):
+                    await c.write_event(AudioChunk(rate=SR, width=2, channels=1, audio=pcm[i:i + SR // 5 * 2]).event())
+                await c.write_event(AudioStop().event())
+                while True:
+                    ev = await asyncio.wait_for(c.read_event(), timeout=120)
+                    if ev is None:
+                        return ""
+                    if Transcript.is_type(ev.type):
+                        return Transcript.from_event(ev).text.strip()
+            finally:
+                with contextlib.suppress(Exception):
+                    await c.disconnect()
+
+    async def transcribe_file(self, path: str) -> str:
+        x = await asyncio.get_running_loop().run_in_executor(None, _read_audio, path)
+        text = await self.transcribe(x)
+        write_meta(path, text=text, text_source="upstream_stt")
+        return text
+
+    def transcribe_later(self, paths: list[str]) -> None:
+        async def run():
+            for p in paths:
+                try:
+                    await self.transcribe_file(p)
+                except Exception as e:  # noqa: BLE001
+                    _LOG.warning("Transcription of %s failed: %s", os.path.basename(p), e)
+        task = asyncio.create_task(run())
+        self._bg.add(task)
+        task.add_done_callback(self._bg.discard)
+
+    def rescore(self, item: dict) -> None:
+        d, _ = self.identify(item["_audio"])
+        item["rescore"] = {"decision": d.label, "name": d.name, "label": self.label(d),
+                           "score": None if d.score is None else round(d.score, 3),
+                           "scores": {k: round(v, 3) for k, v in d.scores.items()}}
 
     def save_settings(self, new: dict) -> None:
         cur = {}
@@ -247,11 +294,39 @@ class Handler(AsyncEventHandler):
 
 
 # -- web UI ---------------------------------------------------------------------
+def _read_audio(path: str):
+    with open(path, "rb") as f:
+        return decode_audio(f.read())
+
+
 def build_web(app: App) -> web.Application:
     r = web.RouteTableDef()
 
+    def loop_run(f, *a):
+        return asyncio.get_running_loop().run_in_executor(None, f, *a)
+
     def err(e: Exception, code: int = 400):
         return web.json_response({"error": str(e)}, status=code)
+
+    def public(i: dict) -> dict:
+        return {k: v for k, v in i.items() if not k.startswith("_")}
+
+    async def read_parts(req) -> list[tuple[str, bytes]]:
+        out = []
+        reader = await req.multipart()
+        while True:
+            part = await reader.next()
+            if part is None:
+                break
+            out.append((part.filename or "file", bytes(await part.read(decode=False))))
+        return out
+
+    async def files_from(req) -> list[str]:
+        body = await req.json()
+        files = body.get("files") or []
+        if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
+            raise ValueError("'files' must be a list of file names")
+        return files
 
     @r.get("/")
     async def index(_):
@@ -274,9 +349,10 @@ def build_web(app: App) -> web.Application:
             return err(e)
         return web.json_response({k: app.opts[k] for k in TUNABLE})
 
+    # -- recent utterances ---------------------------------------------------
     @r.get("/api/recent")
     async def recent(_):
-        return web.json_response([{k: v for k, v in i.items() if not k.startswith("_")} for i in app.recent])
+        return web.json_response([public(i) for i in app.recent])
 
     def find(rid: str):
         for i in app.recent:
@@ -288,20 +364,48 @@ def build_web(app: App) -> web.Application:
     async def recent_audio(req):
         return web.Response(body=encode_wav(find(req.match_info["rid"])["_audio"]), content_type="audio/wav")
 
+    async def _unassign(item: dict) -> None:
+        a = item.get("assigned")
+        if not a:
+            return
+        if a["target"] == "cohort":
+            await loop_run(app.store.delete_cohort, [a["file"]])
+        else:
+            await loop_run(app.store.delete_samples, a["target"], [a["file"]])
+        item["assigned"] = None
+
     @r.post("/api/recent/{rid}/assign")
     async def assign(req):
         item = find(req.match_info["rid"])
         body = await req.json()
+        meta = {"text": item["text"], "text_source": "pipeline",
+                "original": {"decision": item["decision"], "label": item["label"], "score": item["score"],
+                             "time": item["time"]}}
         try:
+            await _unassign(item)
             if body.get("cohort"):
-                await asyncio.get_running_loop().run_in_executor(None, app.store.add_cohort, item["_audio"])
-                return web.json_response({"ok": True})
-            fn = await asyncio.get_running_loop().run_in_executor(
-                None, app.store.add_sample, body.get("name", ""), item["_audio"], "utterance")
+                fn = await loop_run(partial(app.store.add_cohort, item["_audio"], "utterance", **meta))
+                item["assigned"] = {"target": "cohort", "file": fn, "time": time.time()}
+            else:
+                name = body.get("name", "")
+                fn = await loop_run(partial(app.store.add_sample, name, item["_audio"], "utterance", **meta))
+                item["assigned"] = {"target": name, "file": fn, "time": time.time()}
+            await loop_run(app.rescore, item)
         except ValueError as e:
             return err(e)
-        return web.json_response({"ok": True, "file": fn})
+        return web.json_response(public(item))
 
+    @r.post("/api/recent/{rid}/unassign")
+    async def unassign(req):
+        item = find(req.match_info["rid"])
+        try:
+            await _unassign(item)
+            await loop_run(app.rescore, item)
+        except ValueError as e:
+            return err(e)
+        return web.json_response(public(item))
+
+    # -- people --------------------------------------------------------------
     @r.post("/api/people")
     async def add_person(req):
         try:
@@ -312,7 +416,7 @@ def build_web(app: App) -> web.Application:
     @r.delete("/api/people/{name}")
     async def del_person(req):
         try:
-            await asyncio.get_running_loop().run_in_executor(None, app.store.delete_person, req.match_info["name"])
+            await loop_run(app.store.delete_person, req.match_info["name"])
         except ValueError as e:
             return err(e)
         return web.json_response({"ok": True})
@@ -320,36 +424,25 @@ def build_web(app: App) -> web.Application:
     @r.post("/api/people/{name}/upload")
     async def upload(req):
         name = req.match_info["name"]
-        saved, failed = [], []
-        reader = await req.multipart()
-        while True:
-            part = await reader.next()
-            if part is None:
-                break
-            data = await part.read(decode=False)
+        saved, failed, paths = [], [], []
+        for fname, data in await read_parts(req):
             try:
-                x = decode_audio(bytes(data))
-                fn = await asyncio.get_running_loop().run_in_executor(None, app.store.add_sample, name, x, "upload")
+                x = decode_audio(data)
+                fn = await loop_run(partial(app.store.add_sample, name, x, "upload", original_name=fname))
                 saved.append(fn)
+                paths.append(app.store.sample_path(name, fn))
             except Exception as e:  # noqa: BLE001
-                failed.append(f"{part.filename}: {e}")
+                failed.append(f"{fname}: {e}")
+        app.transcribe_later(paths)
         return web.json_response({"saved": saved, "failed": failed})
 
-    @r.post("/api/cohort/upload")
-    async def cohort_upload(req):
-        n = 0
-        reader = await req.multipart()
-        while True:
-            part = await reader.next()
-            if part is None:
-                break
-            try:
-                x = decode_audio(bytes(await part.read(decode=False)))
-                await asyncio.get_running_loop().run_in_executor(None, app.store.add_cohort, x)
-                n += 1
-            except Exception as e:  # noqa: BLE001
-                _LOG.warning("Cohort file %s rejected: %s", part.filename, e)
-        return web.json_response({"added": n, "cohort_size": app.store.cohort_size()})
+    @r.get("/api/people/{name}/samples")
+    async def samples(req):
+        try:
+            name = req.match_info["name"]
+            return web.json_response(next((p["samples"] for p in app.store.people() if p["name"] == name), []))
+        except ValueError as e:
+            return err(e)
 
     @r.get("/api/people/{name}/samples/{fn}")
     async def sample(req):
@@ -364,11 +457,90 @@ def build_web(app: App) -> web.Application:
     @r.delete("/api/people/{name}/samples/{fn}")
     async def del_sample(req):
         try:
-            await asyncio.get_running_loop().run_in_executor(
-                None, app.store.delete_sample, req.match_info["name"], req.match_info["fn"])
+            n = await loop_run(app.store.delete_samples, req.match_info["name"], [req.match_info["fn"]])
         except ValueError as e:
             return err(e)
-        return web.json_response({"ok": True})
+        return web.json_response({"deleted": n})
+
+    @r.post("/api/people/{name}/samples/delete")
+    async def del_samples(req):
+        try:
+            n = await loop_run(app.store.delete_samples, req.match_info["name"], await files_from(req))
+        except ValueError as e:
+            return err(e)
+        return web.json_response({"deleted": n})
+
+    @r.post("/api/people/{name}/samples/{fn}/transcribe")
+    async def transcribe_sample(req):
+        try:
+            p = app.store.sample_path(req.match_info["name"], req.match_info["fn"])
+            if not os.path.exists(p):
+                raise web.HTTPNotFound()
+            return web.json_response({"text": await app.transcribe_file(p)})
+        except ValueError as e:
+            return err(e)
+        except OSError as e:
+            return err(e, 502)
+
+    # -- cohort --------------------------------------------------------------
+    @r.get("/api/cohort")
+    async def cohort(_):
+        return web.json_response({"cohort_norm": app.opts["cohort_norm"], "usable": app.store.cohort_size(),
+                                  "samples": await loop_run(app.store.cohort_list)})
+
+    @r.post("/api/cohort/upload")
+    async def cohort_upload(req):
+        saved, failed, paths = [], [], []
+        for fname, data in await read_parts(req):
+            try:
+                x = decode_audio(data)
+                fn = await loop_run(partial(app.store.add_cohort, x, "upload", original_name=fname))
+                saved.append(fn)
+                paths.append(app.store.cohort_path(fn))
+            except Exception as e:  # noqa: BLE001
+                _LOG.warning("Cohort file %s rejected: %s", fname, e)
+                failed.append(f"{fname}: {e}")
+        app.transcribe_later(paths)
+        return web.json_response({"added": len(saved), "saved": saved, "failed": failed,
+                                  "cohort_size": app.store.cohort_size()})
+
+    @r.get("/api/cohort/{fn}")
+    async def cohort_audio(req):
+        try:
+            p = app.store.cohort_path(req.match_info["fn"])
+        except ValueError as e:
+            return err(e)
+        if not os.path.exists(p):
+            raise web.HTTPNotFound()
+        return web.FileResponse(p)
+
+    @r.delete("/api/cohort/{fn}")
+    async def cohort_delete_one(req):
+        try:
+            n = await loop_run(app.store.delete_cohort, [req.match_info["fn"]])
+        except ValueError as e:
+            return err(e)
+        return web.json_response({"deleted": n, "cohort_size": app.store.cohort_size()})
+
+    @r.post("/api/cohort/delete")
+    async def cohort_delete(req):
+        try:
+            n = await loop_run(app.store.delete_cohort, await files_from(req))
+        except ValueError as e:
+            return err(e)
+        return web.json_response({"deleted": n, "cohort_size": app.store.cohort_size()})
+
+    @r.post("/api/cohort/{fn}/transcribe")
+    async def cohort_transcribe(req):
+        try:
+            p = app.store.cohort_path(req.match_info["fn"])
+            if not os.path.exists(p):
+                raise web.HTTPNotFound()
+            return web.json_response({"text": await app.transcribe_file(p)})
+        except ValueError as e:
+            return err(e)
+        except OSError as e:
+            return err(e, 502)
 
     w = web.Application(client_max_size=64 * 1024 * 1024)
     w.add_routes(r)

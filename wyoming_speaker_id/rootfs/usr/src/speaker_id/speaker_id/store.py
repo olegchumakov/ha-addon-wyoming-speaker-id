@@ -1,6 +1,7 @@
 """People, enrollment samples (WAV on disk) and cached embeddings per model."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -18,9 +19,60 @@ MIN_ENROLL_SPEECH = 0.4
 
 def safe_name(name: str) -> str:
     name = unicodedata.normalize("NFC", (name or "").strip())
-    if not name or len(name) > 64 or name.startswith(".") or not re.fullmatch(r"[\w .\-']+", name):
+    if not name or len(name) > 64 or name.startswith((".", "_")) or not re.fullmatch(r"[\w .\-']+", name):
         raise ValueError("Name may contain letters, digits, spaces, '.', '-', '_' and \"'\" (max 64)")
     return name
+
+
+def _check_fn(fn: str) -> str:
+    if not fn or "/" in fn or "\\" in fn or fn.startswith(".") or not fn.lower().endswith(".wav"):
+        raise ValueError("bad file name")
+    return fn
+
+
+def read_meta(wav_path: str) -> dict:
+    """Metadata of a stored sample: sidecar <file>.json (text, source, original, ...) plus duration/date."""
+    meta: dict = {}
+    side = wav_path + ".json"
+    if os.path.exists(side):
+        try:
+            with open(side, encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            meta = {}
+    try:
+        import soundfile as sf
+
+        info = sf.info(wav_path)
+        meta["duration"] = round(info.frames / float(info.samplerate), 2)
+    except Exception:  # noqa: BLE001
+        meta["duration"] = None
+    meta.setdefault("created", os.path.getmtime(wav_path))
+    meta.setdefault("text", None)
+    meta.setdefault("source", "upload")
+    meta["file"] = os.path.basename(wav_path)
+    return meta
+
+
+def write_meta(wav_path: str, **fields) -> dict:
+    side = wav_path + ".json"
+    meta = {}
+    if os.path.exists(side):
+        try:
+            with open(side, encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            meta = {}
+    meta.update({k: v for k, v in fields.items() if k not in ("file", "duration")})
+    tmp = side + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+    os.replace(tmp, side)
+    return meta
+
+
+def _new_name(tag: str) -> str:
+    return f"{tag}_{time.strftime('%Y%m%d_%H%M%S')}_{int(time.time() * 1000) % 1000:03d}.wav"
 
 
 @dataclass
@@ -94,7 +146,8 @@ class Store:
             pdir = os.path.join(self.people_dir, name)
             if os.path.isdir(pdir):
                 files = sorted(f for f in os.listdir(pdir) if f.lower().endswith(".wav"))
-                out.append({"name": name, "samples": files, "usable": self.counts.get(name, 0)})
+                out.append({"name": name, "samples": [read_meta(os.path.join(pdir, f)) for f in files],
+                            "usable": self.counts.get(name, 0)})
         return out
 
     def add_person(self, name: str) -> str:
@@ -109,35 +162,58 @@ class Store:
             shutil.rmtree(os.path.join(self.cache_dir, name), ignore_errors=True)
             self.rebuild()
 
-    def add_sample(self, name: str, x: np.ndarray, tag: str = "upload") -> str:
+    def add_sample(self, name: str, x: np.ndarray, tag: str = "upload", **meta) -> str:
         name = self.add_person(name)
-        fn = f"{tag}_{time.strftime('%Y%m%d_%H%M%S')}_{int(time.time() * 1000) % 1000:03d}.wav"
-        with open(os.path.join(self.people_dir, name, fn), "wb") as f:
+        fn = _new_name(tag)
+        p = os.path.join(self.people_dir, name, fn)
+        with open(p, "wb") as f:
             f.write(encode_wav(x))
+        write_meta(p, source=tag, created=time.time(), **meta)
         self.rebuild()
         return fn
 
     def sample_path(self, name: str, fn: str) -> str:
-        name = safe_name(name)
-        if "/" in fn or fn.startswith(".") or not fn.lower().endswith(".wav"):
-            raise ValueError("bad file name")
-        return os.path.join(self.people_dir, name, fn)
+        return os.path.join(self.people_dir, safe_name(name), _check_fn(fn))
 
-    def delete_sample(self, name: str, fn: str) -> None:
-        p = self.sample_path(name, fn)
-        with self._lock:
+    def cohort_path(self, fn: str) -> str:
+        return os.path.join(self.cohort_dir, _check_fn(fn))
+
+    def _remove(self, wav_path: str, cache_path: str) -> bool:
+        found = os.path.exists(wav_path)
+        for p in (wav_path, wav_path + ".json", cache_path):
             if os.path.exists(p):
                 os.remove(p)
-            c = os.path.join(self.cache_dir, safe_name(name), fn + ".npy")
-            if os.path.exists(c):
-                os.remove(c)
-            self.rebuild()
+        return found
 
-    def add_cohort(self, x: np.ndarray) -> None:
-        fn = f"cohort_{int(time.time() * 1000)}.wav"
-        with open(os.path.join(self.cohort_dir, fn), "wb") as f:
+    def delete_samples(self, name: str, files: list[str]) -> int:
+        with self._lock:
+            n = sum(self._remove(self.sample_path(name, fn), os.path.join(self.cache_dir, safe_name(name), fn + ".npy"))
+                    for fn in files)
+            self.rebuild()
+        return n
+
+    def delete_sample(self, name: str, fn: str) -> None:
+        self.delete_samples(name, [fn])
+
+    def add_cohort(self, x: np.ndarray, tag: str = "upload", **meta) -> str:
+        fn = _new_name(f"cohort_{tag}")
+        p = os.path.join(self.cohort_dir, fn)
+        with open(p, "wb") as f:
             f.write(encode_wav(x))
+        write_meta(p, source=tag, created=time.time(), **meta)
         self.rebuild()
+        return fn
+
+    def cohort_list(self) -> list[dict]:
+        return [read_meta(os.path.join(self.cohort_dir, f))
+                for f in sorted(os.listdir(self.cohort_dir)) if f.lower().endswith(".wav")]
+
+    def delete_cohort(self, files: list[str]) -> int:
+        with self._lock:
+            n = sum(self._remove(self.cohort_path(fn), os.path.join(self.cache_dir, "_cohort", fn + ".npy"))
+                    for fn in files)
+            self.rebuild()
+        return n
 
     def cohort_size(self) -> int:
         return 0 if self.cohort is None else len(self.cohort)

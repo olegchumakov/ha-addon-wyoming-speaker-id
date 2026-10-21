@@ -1,5 +1,5 @@
 name: Wyoming Speaker ID
-version: "0.1.1"
+version: "0.1.2"
 slug: wyoming_speaker_id
 description: Speech-to-text proxy that tells who is speaking (local speaker identification)
 url: https://github.com/olegchumakov/ha-addon-wyoming-speaker-id

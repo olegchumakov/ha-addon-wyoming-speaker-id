@@ -56,7 +56,14 @@ Recommendations:
   0.35–0.45 for CAM++.
 - Commands shorter than ~0.6 s of speech ("stop") cannot be identified reliably.
 
-Samples are stored in `/data/people/<name>/` and backed up with the add-on.
+Every sample shows its date, duration and text. Text comes from the pipeline when you assign a recent
+utterance; uploaded files are transcribed in the background with the upstream STT (older samples
+have a **Transcribe** button). Samples can be played and deleted one by one or with the checkboxes
+(**Delete selected**); the voiceprint is recomputed immediately. In **Recent utterances** the original
+result stays visible next to the assignment (e.g. `guest → assigned to Anna`) together with the new
+score; **undo** removes the sample again.
+
+Samples are stored in `/data/people/<name>/` (text in `<file>.wav.json`) and backed up with the add-on.
 Recent utterances are kept **in memory only** and disappear on restart.
 
 ## Models
@@ -79,7 +86,8 @@ Thresholds are model-specific – re-check them after switching.
 
 Upload 50+ short clips of *other* people (not household members, preferably recorded by the
 same microphone, e.g. TV speech assigned from **Recent utterances → cohort**) and enable
-`cohort_norm`. Scores then become z-scores (AS-norm) – raise the thresholds (typical
+`cohort_norm`. The cohort list shows each clip with its text and can be cleaned up the same way
+(play, delete, multi-select). Scores then become z-scores (AS-norm) – raise the thresholds (typical
 "known" 3–5, "guest" 1.5–2.5).
 
 ## Options
