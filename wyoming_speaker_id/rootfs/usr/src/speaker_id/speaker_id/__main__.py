@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import shutil
+import socket
 import time
 from functools import partial
 
@@ -23,6 +24,8 @@ from wyoming.server import AsyncEventHandler, AsyncServer
 
 from . import __version__, models
 from .embed import SR, Embedder, Vad, decode_audio, encode_wav, pcm16_to_float
+from .identity import apply_tag
+from .people_api import add_people_route
 from .store import Decision, Store, decide, write_meta
 
 _LOG = logging.getLogger("speaker_id")
@@ -39,7 +42,7 @@ MIN_COHORT = 10
 DEFAULTS = {
     "upstream_uri": "tcp://core-whisper:10300", "model": "redimnet2_b2", "threshold_high": 0.45,
     "threshold_low": 0.30, "margin": 0.08, "min_speech_seconds": 0.6, "tag_template": "[speaker: {name}] {text}",
-    "guest_label": "guest", "unknown_label": "unknown", "tag_unknown": True, "cohort_norm": False,
+    "guest_label": "guest", "unknown_label": "unknown", "tag_unknown": True, "shared_secret": "", "cohort_norm": False,
     "publish_sensor": True, "sensor_entity": "sensor.voice_last_speaker", "recent_buffer_size": 30,
     "log_level": "info", "wyoming_uri": "tcp://0.0.0.0:10310", "web_port": 8099, "max_speech_seconds": 8.0,
     "threshold_high_norm": 2.5, "threshold_low_norm": 1.0, "margin_norm": 0.5,
@@ -107,17 +110,18 @@ class App:
         return self.opts["guest_label"] if d.label == "guest" else self.opts["unknown_label"]
 
     def tag(self, d: Decision, text: str) -> str:
-        if not text.strip():
-            return text
-        if d.label in ("short", "uncertain") and not self.opts["tag_unknown"]:
-            return text
-        who = self.label(d)
-        if not who:
-            return text
-        try:
-            return self.opts["tag_template"].format(name=who, text=text)
-        except (KeyError, IndexError, ValueError):
-            return f"[{who}] {text}"
+        o = self.opts
+        return apply_tag(
+            text,
+            secret=o.get("shared_secret") or "",
+            label=d.label,
+            name=d.name,
+            score=d.score,
+            tag_unknown=o["tag_unknown"],
+            tag_template=o["tag_template"],
+            guest_label=o["guest_label"],
+            unknown_label=o["unknown_label"],
+        )
 
     def remember(self, x: np.ndarray, d: Decision, text: str, ms: float) -> dict:
         item = {"id": next(self._ids), "time": time.time(), "text": text, "decision": d.label, "name": d.name,
@@ -713,6 +717,11 @@ def build_web(app: App) -> web.Application:
             resp.headers.update(NO_STORE)
         return resp
 
+    add_people_route(
+        r,
+        lambda: app.opts.get("shared_secret") or "",
+        lambda: [p["name"] for p in app.store.people()],
+    )
     w = web.Application(client_max_size=64 * 1024 * 1024, middlewares=[no_cache])
     w.add_routes(r)
     return w
@@ -729,6 +738,12 @@ async def amain() -> None:
     server = AsyncServer.from_uri(app.opts["wyoming_uri"])
     _LOG.info("Wyoming STT on %s -> %s; web UI on :%s", app.opts["wyoming_uri"], app.opts["upstream_uri"],
               app.opts["web_port"])
+    # Hostname on the internal network (underscores in the slug become hyphens). The password is not logged.
+    _LOG.info("People list: http://%s:%s/api/people", socket.gethostname(), int(app.opts["web_port"]))
+    if app.opts.get("shared_secret"):
+        _LOG.info("Shared password is set; transcripts carry a signed speaker mark")
+    else:
+        _LOG.info("Shared password is empty; transcripts keep the name label")
     await server.run(partial(Handler, app))
 
 

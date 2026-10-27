@@ -1,5 +1,5 @@
 name: Wyoming Speaker ID
-version: "0.1.4"
+version: "0.1.5"
 slug: wyoming_speaker_id
 description: Speech-to-text proxy that tells who is speaking (local speaker identification)
 url: https://github.com/olegchumakov/ha-addon-wyoming-speaker-id
@@ -14,6 +14,9 @@ discovery:
 ingress: true
 panel_icon: mdi:account-voice
 panel_title: Speaker ID
+# 8099 is the page (ingress) and GET /api/people. It is not listed under ports:
+# Home Assistant reaches it on the internal network, and a host port would open
+# the page without the Home Assistant login. The people list still requires the password.
 ports:
   10310/tcp: null
 ports_description:
@@ -29,6 +32,7 @@ options:
   guest_label: guest
   unknown_label: unknown
   tag_unknown: true
+  shared_secret: ""
   cohort_norm: false
   publish_sensor: true
   sensor_entity: sensor.voice_last_speaker
@@ -45,6 +49,7 @@ schema:
   guest_label: str
   unknown_label: str
   tag_unknown: bool
+  shared_secret: password
   cohort_norm: bool
   publish_sensor: bool
   sensor_entity: match(^sensor\.[a-z0-9_]+$)

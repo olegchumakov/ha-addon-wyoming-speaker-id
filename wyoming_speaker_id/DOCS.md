@@ -25,6 +25,9 @@ It works with any language: voiceprints do not depend on what is said.
    `sensor.voice_last_speaker` is updated (state = name/label; attributes: `decision`,
    `person`, `score`, `scores`, `speech_seconds`, `text`).
 
+If **Shared password** is set, step 5 does not add the name label. A signed mark is added
+instead (below). The sensor still shows the name, or the guest / unknown label.
+
 ## Installation
 
 1. Add this repository: **Settings → Add-ons → Add-on store → ⋮ → Repositories** →
@@ -107,6 +110,7 @@ It takes effect from 10 clips.
 | `tag_template` | `[speaker: {name}] {text}` | `{name}`, `{text}` placeholders |
 | `guest_label` / `unknown_label` | `guest` / `unknown` | labels used in the tag and sensor |
 | `tag_unknown` | true | tag uncertain / too short commands |
+| `shared_secret` | *(empty)* | shared password; empty keeps the name label |
 | `cohort_norm` | false | compare with other voices (cohort) |
 | `publish_sensor`, `sensor_entity` | true, `sensor.voice_last_speaker` | last-speaker sensor |
 | `recent_buffer_size` | 30 | utterances (with audio) kept for the UI, survive restarts |
@@ -114,11 +118,55 @@ It takes effect from 10 clips.
 Thresholds, margin and minimum speech can also be changed live with the sliders in the
 web UI (stored in `/data/settings.json`, they override the options).
 
+## Shared password (optional)
+
+Leave **Shared password** empty and nothing changes: the transcript still starts with the
+name from the tag template.
+
+Set the same password here and where you decide who may do what by voice. The name label
+is then not added. The transcript starts with a signed mark. The other side checks it and
+removes it before the text reaches the assistant. A voice below the usual thresholds is
+sent as an unknown speaker (the name field is empty), not as the guest or unknown words.
+
+The mark looks like this (full rules and test vectors are in [SPEC.md](../SPEC.md)):
+
+```
+⟦spk1;n=Anna;c=0.73;t=1700000000;r=0123456789abcdef;s=4e3854eaed0f699014eead3a73f1a358618a699bb372d76d6715658adad72386⟧ turn on the light
+```
+
+`n` is the person name, percent-encoded (Cyrillic `Анна` becomes `%D0%90%D0%BD%D0%BD%D0%B0`).
+`c` is the score from 0.00 to 1.00 (two decimals; a missing score is 0.00). The signature
+covers the mark and the exact phrase after it.
+
+### People list
+
+The other side can read the enrolled names:
+
+```
+GET http://<add-on hostname>:8099/api/people
+X-Speaker-Key: <the same password>
+```
+
+Answer: `{"people":[{"name":"..."}]}`. Without the right password the answer is 401.
+If the password in the add-on is empty, the answer is always 401.
+
+The add-on log prints the exact URL (`People list: http://<hostname>:8099/api/people`).
+The hostname is the add-on's name on Home Assistant's internal network: underscores in
+the slug become hyphens, and a repository prefix is added. A local add-on is typically
+`http://local-wyoming-speaker-id:8099/api/people`.
+
+Port 8099 is the add-on page. It is **not** published to your network (it is not in the
+add-on port list). Home Assistant reaches it from the inside, the same way it reaches
+the page for the sidebar. Do not map this port to the host: the page would then open
+without the Home Assistant login. The people list itself still asks for the password.
+
 ## Using the speaker in Home Assistant
 
-- LLM agents read the tag directly. Add to the agent prompt, e.g.: *"The user message may
-  start with `[speaker: NAME]`. It is the identified speaker; `guest` means an unknown voice
-  – do not perform security-sensitive actions for guests."*
+- With no shared password, LLM agents read the name label. Add to the agent prompt, e.g.:
+  *"The user message may start with `[speaker: NAME]`. It is the identified speaker;
+  `guest` means an unknown voice – do not perform security-sensitive actions for guests."*
+- With a shared password, that label is not for the assistant. The access integration
+  removes the mark; do not ask the assistant to read it.
 - Automations can use `sensor.voice_last_speaker` (note: the sensor is not restored after
   a Home Assistant restart until the next command).
 

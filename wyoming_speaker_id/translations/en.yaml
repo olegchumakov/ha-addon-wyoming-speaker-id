@@ -29,6 +29,9 @@ configuration:
   tag_unknown:
     name: Tag uncertain results
     description: If off, uncertain/short commands are passed through without a tag.
+  shared_secret:
+    name: Shared password
+    description: The same password you enter where voice access is decided. Leave empty to keep the name in front of the phrase.
   cohort_norm:
     name: Compare with other voices
     description: Also compare the voice with clips of other people from the cohort, so household members are confused with strangers less often. Needs 20+ clips. Thresholds for this mode are switched automatically.
