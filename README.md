@@ -21,6 +21,8 @@ the text for the conversation agent: `[speaker: Anna] turn on the light`.
 - Web UI: manage people, enroll from uploaded WAVs or from recent real commands,
   see scores, tune thresholds with sliders
 - `sensor.voice_last_speaker` for automations; Wyoming auto-discovery
+- Optional shared password: a signed speaker mark and a people list for per-person
+  voice access ([SPEC.md](SPEC.md))
 - amd64 and aarch64
 
 Documentation: [DOCS.md](wyoming_speaker_id/DOCS.md)

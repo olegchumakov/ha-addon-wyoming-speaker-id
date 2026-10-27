@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.5
+
+- Optional shared password. When it is set, the name in front of the phrase is replaced by a
+  signed speaker mark (see SPEC.md) so another integration can check who spoke. When it is empty,
+  the phrase is tagged exactly as before.
+- People list for that integration: `GET /api/people` on port 8099, only with the same password in
+  the `X-Speaker-Key` header (otherwise 401). From Home Assistant:
+  `http://<add-on hostname>:8099/api/people` (the log prints the exact URL). The port is not
+  published to the network.
+
 ## 0.1.4
 
 - Option names and descriptions, web UI texts and docs are back to the 0.1.2 wording. Only "Compare with

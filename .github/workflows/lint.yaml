@@ -23,7 +23,13 @@ jobs:
         with:
           python-version: "3.11"
       - name: Ruff
-        run: pipx run ruff check --line-length 120 wyoming_speaker_id/rootfs/usr/src/speaker_id tools
+        run: pipx run ruff check --line-length 120 wyoming_speaker_id/rootfs/usr/src/speaker_id tools tests
+      - name: Unit tests
+        env:
+          PYTHONPATH: wyoming_speaker_id/rootfs/usr/src/speaker_id
+        run: |
+          pip install 'aiohttp>=3.10,<4'
+          python -m unittest discover -s tests -v
       - name: Import / smoke test
         working-directory: wyoming_speaker_id/rootfs/usr/src/speaker_id
         env:
