@@ -42,6 +42,11 @@ The default upstream is `tcp://core-whisper:10300` (official Whisper add-on). An
 STT works, also outside Home Assistant (`tcp://192.0.2.10:10300`). The web UI shows whether it is
 reachable (**Test**).
 
+The add-on reports the languages of the main STT to Home Assistant and remembers them in `/data`.
+If the main STT is still starting (for example after a restart), the remembered list is used. If
+there is none yet, the add-on waits a few seconds and otherwise does not answer, so Home Assistant
+retries the integration later instead of keeping an empty list.
+
 ## Enrollment
 
 Open the add-on web UI (**Speaker ID** in the sidebar).
@@ -102,6 +107,7 @@ It takes effect from 10 clips.
 | Option | Default | Description |
 |---|---|---|
 | `upstream_uri` | `tcp://core-whisper:10300` | Wyoming STT that does the transcription |
+| `fallback_languages` | *(empty)* | optional; languages (e.g. `en, de`) used only until the main STT has answered once |
 | `model` | `redimnet2_b2` | speaker model (table above) |
 | `threshold_high` | 0.45 | similarity needed to name a person |
 | `threshold_low` | 0.30 | below: guest |

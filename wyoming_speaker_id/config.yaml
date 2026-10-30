@@ -1,5 +1,5 @@
 name: Wyoming Speaker ID
-version: "0.1.5"
+version: "0.1.6"
 slug: wyoming_speaker_id
 description: Speech-to-text proxy that tells who is speaking (local speaker identification)
 url: https://github.com/olegchumakov/ha-addon-wyoming-speaker-id
@@ -40,6 +40,7 @@ options:
   log_level: info
 schema:
   upstream_uri: str
+  fallback_languages: str?
   model: list(redimnet2_b2|campplus_zh_en_advanced|campplus_en_voxceleb|eres2net_en_voxceleb|eres2netv2_zh_cn|wespeaker_resnet34_en)
   threshold_high: float(-1,1)
   threshold_low: float(-1,1)

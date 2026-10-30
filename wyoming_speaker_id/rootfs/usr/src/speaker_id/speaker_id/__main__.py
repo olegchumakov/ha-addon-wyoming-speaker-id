@@ -25,6 +25,7 @@ from wyoming.server import AsyncEventHandler, AsyncServer
 from . import __version__, models
 from .embed import SR, Embedder, Vad, decode_audio, encode_wav, pcm16_to_float
 from .identity import apply_tag
+from .languages import Languages, collect
 from .people_api import add_people_route
 from .store import Decision, Store, decide, write_meta
 
@@ -48,6 +49,11 @@ DEFAULTS = {
     "threshold_high_norm": 2.5, "threshold_low_norm": 1.0, "margin_norm": 0.5,
 }
 MAX_KEEP_S = 15.0
+# How long a Describe from Home Assistant may wait for the upstream STT when no language list is known at all.
+# Home Assistant gives up after 1 s (older versions) or 5 s and simply retries later, which is what we want then.
+DESCRIBE_WAIT_S = 4.0
+UPSTREAM_RETRY_S = (2, 5, 10, 20, 30, 60)
+UPSTREAM_REFRESH_S = 30 * 60
 NO_STORE = {"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"}
 
 
@@ -75,7 +81,8 @@ class App:
         self.recent: collections.deque = collections.deque(maxlen=max(1, int(self.opts["recent_buffer_size"])))
         self.recent_dir = os.path.join(DATA, "recent")
         self._ids = itertools.count(self.load_recent() + 1)
-        self.languages = ["en"]
+        self.langs = Languages(DATA, self.opts["upstream_uri"], self.opts.get("fallback_languages"))
+        self.upstream_ready = asyncio.Event()
         self.token = os.environ.get("SUPERVISOR_TOKEN")
         self._stt_lock = asyncio.Lock()
         self._bg: set = set()
@@ -286,7 +293,25 @@ class App:
             name="speaker-id", description=f"Speaker ID ({self.model_name}) via {self.opts['upstream_uri']}",
             attribution=att, installed=True, version=__version__,
             models=[AsrModel(name="speaker-id", description="Upstream STT with speaker tag", attribution=att,
-                             installed=True, languages=self.languages, version=__version__)])])
+                             installed=True, languages=self.langs.current, version=__version__)])])
+
+    def note_upstream_languages(self, langs: list[str]) -> bool:
+        """Store a language list just reported by the upstream STT (empty lists are ignored)."""
+        if not self.langs.set_live(langs):
+            return False
+        self.upstream_ready.set()
+        return True
+
+    async def describe_info(self) -> Info | None:
+        """Info for a Describe, or None if no language list is known yet (then it is better not to answer)."""
+        if not self.langs.current:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self.upstream_ready.wait(), timeout=DESCRIBE_WAIT_S)
+        if not self.langs.current:
+            _LOG.warning("Not answering a Describe yet: the upstream STT %s has not reported its languages "
+                         "(Home Assistant will ask again)", self.opts["upstream_uri"])
+            return None
+        return self.info()
 
     async def check_upstream(self) -> dict:
         """Connect to the upstream STT and ask for its info (for the web UI)."""
@@ -308,7 +333,8 @@ class App:
                     await c.disconnect()
             info = Info.from_event(ev)
             progs = [{"name": p.name, "version": p.version, "models": [m.name for m in p.models]} for p in info.asr]
-            langs = sorted({lang for p in info.asr for m in p.models for lang in m.languages})
+            langs = collect(info)
+            self.note_upstream_languages(langs)
             return {"ok": bool(info.asr), "uri": uri, "ms": round((time.perf_counter() - t0) * 1000),
                     "programs": progs, "languages": len(langs),
                     "error": None if info.asr else "no speech-to-text service found at this address"}
@@ -316,28 +342,50 @@ class App:
             return {"ok": False, "uri": uri, "ms": round((time.perf_counter() - t0) * 1000),
                     "error": f"{type(e).__name__}: {e}" if str(e) else type(e).__name__}
 
-    async def describe_upstream(self) -> None:
-        for attempt in range(30):
-            try:
-                c = AsyncClient.from_uri(self.opts["upstream_uri"])
-                await c.connect()
-                await c.write_event(Describe().event())
-                while True:
-                    ev = await asyncio.wait_for(c.read_event(), timeout=10)
-                    if ev is None:
-                        break
-                    if Info.is_type(ev.type):
-                        info = Info.from_event(ev)
-                        langs = sorted({lang for p in info.asr for m in p.models for lang in m.languages})
-                        if langs:
-                            self.languages = langs
-                        break
+    async def fetch_upstream_languages(self) -> list[str]:
+        """Ask the upstream STT for its info; returns its languages (empty if it has none yet)."""
+        c = AsyncClient.from_uri(self.opts["upstream_uri"])
+        await asyncio.wait_for(c.connect(), timeout=5)
+        try:
+            await c.write_event(Describe().event())
+            while True:
+                ev = await asyncio.wait_for(c.read_event(), timeout=10)
+                if ev is None:
+                    raise ConnectionError("connection closed")
+                if Info.is_type(ev.type):
+                    return collect(Info.from_event(ev))
+        finally:
+            with contextlib.suppress(Exception):
                 await c.disconnect()
-                _LOG.info("Upstream %s: %d languages", self.opts["upstream_uri"], len(self.languages))
-                return
+
+    async def describe_upstream(self) -> None:
+        """Keep asking the upstream STT for its languages until it answers, then refresh them now and then."""
+        uri = self.opts["upstream_uri"]
+        src = self.langs.source
+        if src:
+            _LOG.info("Until %s answers, using %s languages: %s", uri,
+                      "saved" if src == "saved" else "configured fallback", ", ".join(self.langs.current))
+        attempt, first = 0, True
+        while True:
+            try:
+                langs = await self.fetch_upstream_languages()
+                err = None if langs else "it reports no languages yet (still starting?)"
             except Exception as e:  # noqa: BLE001
-                _LOG.warning("Upstream %s not reachable (%s), retry %d", self.opts["upstream_uri"], e, attempt + 1)
-                await asyncio.sleep(10)
+                langs, err = [], f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+            if self.note_upstream_languages(langs):
+                if first or attempt:
+                    _LOG.info("Upstream %s: %d languages", uri, len(self.langs.current))
+                attempt, first = 0, False
+                await asyncio.sleep(UPSTREAM_REFRESH_S)
+                continue
+            attempt += 1
+            wait = UPSTREAM_RETRY_S[min(attempt, len(UPSTREAM_RETRY_S)) - 1]
+            if self.upstream_ready.is_set():
+                _LOG.debug("Upstream %s refresh failed (%s); keeping %d languages", uri, err, len(self.langs.current))
+                await asyncio.sleep(UPSTREAM_REFRESH_S)
+            else:
+                _LOG.warning("Upstream %s not ready (%s), retry %d in %d s", uri, err, attempt, wait)
+                await asyncio.sleep(wait)
 
 
 class Handler(AsyncEventHandler):
@@ -358,7 +406,10 @@ class Handler(AsyncEventHandler):
 
     async def handle_event(self, event: Event) -> bool:
         if Describe.is_type(event.type):
-            await self.write_event(self.app.info().event())
+            info = await self.app.describe_info()
+            if info is None:
+                return False  # close without an answer; an empty language list would stick in Home Assistant
+            await self.write_event(info.event())
             return True
         if Transcribe.is_type(event.type):
             self.transcribe = event
@@ -471,7 +522,8 @@ def build_web(app: App) -> web.Application:
                            f".test(location.search))location.replace(location.pathname+'?v={__version__}')\">")
         return web.json_response({
             "version": __version__, "model": o["model"], "model_file": app.model_name,
-            "upstream": o["upstream_uri"], "languages": len(app.languages),
+            "upstream": o["upstream_uri"], "languages": len(app.langs.current),
+            "languages_source": app.langs.source,
             "settings": app.active_settings(), "cohort_norm": o["cohort_norm"], "norm_active": app.norm_active(),
             "min_cohort": MIN_COHORT, "recent_count": len(app.recent), "recent_limit": o["recent_buffer_size"],
             "recent_disk_bytes": app.recent_disk(),
