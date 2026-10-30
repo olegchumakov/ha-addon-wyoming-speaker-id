@@ -1,4 +1,5 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-debian:bookworm
+# The base image for each architecture comes from build.yaml (passed in by the builder and CI).
+ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PYTHONUNBUFFERED=1

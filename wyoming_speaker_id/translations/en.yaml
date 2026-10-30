@@ -2,6 +2,12 @@ configuration:
   upstream_uri:
     name: Upstream STT
     description: Wyoming speech-to-text service that does the transcription (e.g. tcp://core-whisper:10300).
+  fallback_languages:
+    name: Languages while the main STT starts
+    description: >-
+      Optional. Usually leave empty: the languages are taken from the main STT and remembered.
+      Only matters if the main STT has never answered yet, e.g. right after installation.
+      Language codes separated by commas, e.g. "en" or "en, de".
   model:
     name: Speaker model
     description: Speaker embedding model. Changing it recomputes all voiceprints from the stored samples.

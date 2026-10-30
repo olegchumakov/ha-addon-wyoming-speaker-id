@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.6
+
+- Fix: after a Home Assistant restart, speech recognition could stop working until the Wyoming
+  integration was reloaded by hand (error "stt-provider-unsupported-metadata"). The add-on was
+  asked for its languages before Whisper had started and answered with an empty list, and Home
+  Assistant kept that list. Now the add-on never reports an empty list: it uses the languages last
+  received from the main STT (remembered in `/data`), and if it has none yet it does not answer,
+  so Home Assistant simply tries again a bit later.
+- The main STT is asked again until it answers (no longer giving up after a few minutes), and its
+  languages are refreshed every 30 minutes.
+- New optional setting "Languages while the main STT starts" (`fallback_languages`). Usually not
+  needed; it only matters before the main STT has ever answered, e.g. right after installation.
+- The web UI status also shows where the language list came from (`languages_source`).
+
 ## 0.1.5
 
 - Optional shared password. When it is set, the name in front of the phrase is replaced by a

@@ -17,6 +17,7 @@ the text for the conversation agent: `[speaker: Anna] turn on the light`.
 
 - Works with any Wyoming STT (default: the official Whisper add-on) and any language
 - No extra latency: identification runs in parallel with transcription
+- Survives restarts: works even if Whisper starts later than Home Assistant
 - Modern speaker models: ReDimNet2-B2 (default), CAM++, ERes2Net(V2), WeSpeaker
 - Web UI: manage people, enroll from uploaded WAVs or from recent real commands,
   see scores, tune thresholds with sliders
